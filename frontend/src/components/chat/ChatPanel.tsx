@@ -215,6 +215,7 @@ export function ChatPanel({ onTrace }: Props) {
   const [firstTokenMs, setFirstTokenMs] = useState<number | null>(null);
   const [backendStatuses, setBackendStatuses] = useState<BackendStatuses | null>(null);
   const [errorBanner, setErrorBanner] = useState<ErrorBanner | null>(null);
+  const [uploadingCount, setUploadingCount] = useState(0);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [conversations, setConversations] = useState<ConversationRecord[]>([]);
   const [historyOpen, setHistoryOpen] = useState(true);
@@ -222,8 +223,10 @@ export function ChatPanel({ onTrace }: Props) {
   const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesRef = useRef<Message[]>([]);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const uploadTasksRef = useRef<Promise<void>[]>([]);
   const streamStartedAtRef = useRef(0);
   const firstTokenSeenRef = useRef(false);
 
@@ -358,8 +361,11 @@ export function ChatPanel({ onTrace }: Props) {
     const files = Array.from(fileList);
     if (files.length === 0) return;
 
-    setStatusText(`上传中：${files.length} 个文档`);
-    for (const file of files) {
+    setChatMode("kb");
+    setUploadingCount((count) => count + files.length);
+    setStatusText(`上传中：${files.length} 个文档，请稍候再提问`);
+
+    const tasks = files.map(async (file) => {
       try {
         const result = await uploadDocument(file);
         setStatusText(`已上传：${file.name}，${result.chunk_count || 0} 个片段`);
@@ -369,13 +375,27 @@ export function ChatPanel({ onTrace }: Props) {
             error instanceof Error ? error.message : "未知错误"
           }`,
         );
+      } finally {
+        setUploadingCount((count) => Math.max(0, count - 1));
       }
+    });
+
+    uploadTasksRef.current = [...uploadTasksRef.current, ...tasks];
+    try {
+      await Promise.allSettled(tasks);
+    } finally {
+      uploadTasksRef.current = uploadTasksRef.current.filter((task) => !tasks.includes(task));
     }
   };
 
   const handleSend = async () => {
     const query = input.trim();
     if (!query || streaming) return;
+
+    if (uploadTasksRef.current.length > 0) {
+      setStatusText("正在等待文档入库完成");
+      await Promise.allSettled(uploadTasksRef.current);
+    }
 
     const convId = conversationId || newConversationId();
     if (!conversationId) setConversationId(convId);
@@ -695,7 +715,38 @@ export function ChatPanel({ onTrace }: Props) {
               </div>
             )}
             <div className="flex items-end gap-2 rounded-lg border border-border bg-card/80 p-2 shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm,.csv"
+                onChange={(e) => {
+                  if (!e.target.files) return;
+                  void uploadFiles(e.target.files);
+                  e.target.value = "";
+                }}
+                className="hidden"
+                aria-label="上传知识库文档"
+              />
               <div className="flex shrink-0 flex-col gap-1 sm:flex-row">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={streaming || uploadingCount > 0}
+                  title={uploadingCount > 0 ? "文档上传中" : "上传文档"}
+                  aria-label="上传文档"
+                  className={cn(
+                    "flex h-8 w-8 items-center justify-center rounded-md border text-muted-foreground transition-colors",
+                    "border-border bg-background/45 hover:bg-muted/60 hover:text-foreground",
+                    "disabled:cursor-not-allowed disabled:opacity-60",
+                  )}
+                >
+                  {uploadingCount > 0 ? (
+                    <Upload className="h-3.5 w-3.5 animate-pulse" />
+                  ) : (
+                    <Upload className="h-3.5 w-3.5" />
+                  )}
+                </button>
                 {([
                   ["auto", "自动"],
                   ["kb", "知识库"],
@@ -737,11 +788,11 @@ export function ChatPanel({ onTrace }: Props) {
                   "focus:outline-none",
                   "disabled:cursor-not-allowed disabled:opacity-50",
                 )}
-                disabled={streaming}
+                disabled={streaming || uploadingCount > 0}
               />
               <button
                 onClick={streaming ? stopStreaming : handleSend}
-                disabled={!streaming && !input.trim()}
+                disabled={!streaming && (!input.trim() || uploadingCount > 0)}
                 title={streaming ? "停止生成" : "发送"}
                 aria-label="发送"
                 className={cn(
