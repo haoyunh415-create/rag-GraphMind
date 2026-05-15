@@ -1,0 +1,45 @@
+# Core
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Agent & LLM
+openai==1.58.1
+langchain==0.3.14
+langchain-community==0.3.14
+langchain-openai==0.3.0
+langgraph==0.2.60
+
+# Vector Store
+pymilvus==2.6.12
+sqlite-vec>=0.1.6
+scikit-learn==1.8.0
+
+# Knowledge Graph
+neo4j==5.27.0
+
+# Full-text Search
+elasticsearch==8.17.0
+
+# Document Ingestion
+unstructured==0.16.0
+python-multipart==0.0.19
+pypdf2==3.0.1
+markdown==3.7
+
+# Storage & Cache
+minio==7.2.10
+redis==5.2.1
+
+# Observability
+opentelemetry-api==1.29.0
+opentelemetry-sdk==1.29.0
+opentelemetry-instrumentation-fastapi==0.50b0
+
+# Utilities
+numpy==1.26.4
+httpx==0.28.1
+python-dotenv==1.0.1
+tenacity==9.0.0
+loguru==0.7.3
