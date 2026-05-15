@@ -16,6 +16,38 @@ def _normalize_answer(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
+
+def _local_grounded_answer(query: str, contexts: list[dict], error: Exception) -> str:
+    """Build a deterministic answer when the LLM is unavailable."""
+    excerpts: list[str] = []
+    for ctx in contexts[:3]:
+        doc = ctx.get("document_name", ctx.get("document_id", "未知文档"))
+        text = str(ctx.get("text", "")).strip().replace("\n", " ")
+        if len(text) > 420:
+            text = text[:420].rstrip() + "..."
+        if text:
+            excerpts.append(f"- {doc}: {text}")
+
+    lowered = query.lower()
+    direct_answer = ""
+    if "前端" in query and ("端口" in query or "port" in lowered):
+        joined = " ".join(str(ctx.get("text", "")) for ctx in contexts[:5])
+        match = re.search(r"前端(?:服务)?(?:默认)?(?:访问地址是\s*`?http://localhost:)?(?:运行在\s*)?(\d{4,5})\s*端口", joined)
+        if match:
+            direct_answer = f"前端默认运行在 {match.group(1)} 端口。"
+
+    if not direct_answer:
+        direct_answer = "大模型暂时不可用，但知识库已经检索到相关片段。请根据下面依据核对答案。"
+
+    return "\n\n".join([
+        "### 结论",
+        direct_answer,
+        "### 依据",
+        "\n".join(excerpts) if excerpts else "- 未找到可展示的文本片段。",
+        "### 补充说明",
+        f"生成阶段调用大模型失败，请检查 OPENAI_API_KEY / LLM_BASE_URL / OPENAI_MODEL。错误摘要：{error}",
+    ])
+
 DECOMPOSE_SYSTEM = """You are a query decomposition agent. Your job is to break complex questions into simpler, atomic sub-questions that can be answered by searching a knowledge base.
 
 Rules:
@@ -205,7 +237,7 @@ Use the required Markdown format. Do not include citation markers such as [1] or
 
     except Exception as e:
         logger.error(f"LLM synthesis failed: {e}")
-        yield f"\n\n[Error generating answer: {e}]"
+        yield _local_grounded_answer(query, contexts, e)
 
 
 # ------------------------------------------------------------------
