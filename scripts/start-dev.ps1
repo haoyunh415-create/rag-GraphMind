@@ -84,6 +84,40 @@ function Start-DevShell {
         -WindowStyle Hidden | Out-Null
 }
 
+function Clear-NextCache {
+    $nextDir = Join-Path $FrontendDir ".next"
+    $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path
+    $resolvedNext = Resolve-Path -LiteralPath $nextDir -ErrorAction SilentlyContinue
+    if ($resolvedNext -and $resolvedNext.Path.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        Write-Step "Removing stale Next.js cache: $($resolvedNext.Path)"
+        Remove-Item -LiteralPath $resolvedNext.Path -Recurse -Force
+    }
+}
+
+function Start-Frontend {
+    param([string]$Command)
+    Stop-PortListener -Port $FrontendPort
+    Start-Sleep -Seconds 1
+    Start-DevShell -Name "frontend" -Command $Command
+}
+
+function Test-FrontendCss {
+    param([string]$Html)
+
+    $matches = [regex]::Matches($Html, 'href="([^"]*\.css[^"]*)"')
+    if ($matches.Count -eq 0) {
+        throw "Frontend HTML did not include a CSS link. The page may render without styles."
+    }
+
+    $cssHref = $matches[0].Groups[1].Value
+    if ($cssHref.StartsWith("/")) {
+        $cssUrl = "$frontendUrl$cssHref"
+    } else {
+        $cssUrl = $cssHref
+    }
+    Wait-Http -Name "frontend css" -Url $cssUrl -Seconds 10 | Out-Null
+}
+
 if (-not (Test-Path -LiteralPath $BackendPython)) {
     throw "Backend virtualenv python not found: $BackendPython"
 }
@@ -98,13 +132,7 @@ Stop-PortListener -Port $BackendPort
 Start-Sleep -Seconds 1
 
 if ($CleanNext) {
-    $nextDir = Join-Path $FrontendDir ".next"
-    $resolvedRoot = (Resolve-Path -LiteralPath $Root).Path
-    $resolvedNext = Resolve-Path -LiteralPath $nextDir -ErrorAction SilentlyContinue
-    if ($resolvedNext -and $resolvedNext.Path.StartsWith($resolvedRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
-        Write-Step "Removing stale Next.js cache: $($resolvedNext.Path)"
-        Remove-Item -LiteralPath $resolvedNext.Path -Recurse -Force
-    }
+    Clear-NextCache
 }
 
 $backendLog = Join-Path $Root "backend-dev.log"
@@ -121,7 +149,7 @@ $frontendCommand = @(
 ) -join "; "
 
 Start-DevShell -Name "backend" -Command $backendCommand
-Start-DevShell -Name "frontend" -Command $frontendCommand
+Start-Frontend -Command $frontendCommand
 
 $backendUrl = "http://${HostName}:${BackendPort}"
 $frontendUrl = "http://${HostName}:${FrontendPort}"
@@ -129,18 +157,15 @@ $frontendUrl = "http://${HostName}:${FrontendPort}"
 Wait-Http -Name "backend" -Url "$backendUrl/api/health" -Seconds $TimeoutSeconds | Out-Null
 $frontendResponse = Wait-Http -Name "frontend" -Url $frontendUrl -Seconds $TimeoutSeconds
 
-$cssHref = $null
-$matches = [regex]::Matches($frontendResponse.Content, 'href="([^"]*\.css[^"]*)"')
-if ($matches.Count -gt 0) {
-    $cssHref = $matches[0].Groups[1].Value
-    if ($cssHref.StartsWith("/")) {
-        $cssUrl = "$frontendUrl$cssHref"
-    } else {
-        $cssUrl = $cssHref
-    }
-    Wait-Http -Name "frontend css" -Url $cssUrl -Seconds 10 | Out-Null
-} else {
-    Write-Step "Warning: no CSS link found in frontend HTML"
+try {
+    Test-FrontendCss -Html $frontendResponse.Content
+} catch {
+    Write-Step "Frontend CSS check failed: $($_.Exception.Message)"
+    Write-Step "Restarting frontend once with a clean Next.js cache"
+    Clear-NextCache
+    Start-Frontend -Command $frontendCommand
+    $frontendResponse = Wait-Http -Name "frontend" -Url $frontendUrl -Seconds $TimeoutSeconds
+    Test-FrontendCss -Html $frontendResponse.Content
 }
 
 Write-Host ""
