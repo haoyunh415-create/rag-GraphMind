@@ -111,6 +111,7 @@ function TraceCard({ trace, isLatest }: { trace: Trace; isLatest: boolean }) {
 
   return (
     <div
+      data-testid="trace-card"
       className={cn(
         "rounded-lg border bg-card/60 transition-colors",
         isLatest ? "border-primary/35 ring-1 ring-primary/10" : "border-border/60",
@@ -359,7 +360,7 @@ function Chip({ children }: { children: ReactNode }) {
 
 export function TracePanel({ traces, latestQueryId }: Props) {
   return (
-    <div className="mx-auto max-w-4xl p-4">
+    <div className="mx-auto max-w-4xl p-4" data-testid="trace-panel">
       <div className="mb-4 flex items-center gap-2.5">
         <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10">
           <Activity className="h-4 w-4 text-primary" />

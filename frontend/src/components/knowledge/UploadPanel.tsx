@@ -213,6 +213,7 @@ export function UploadPanel() {
 
         <input
           ref={fileInputRef}
+          data-testid="knowledge-file-input"
           type="file"
           multiple
           accept={ALLOWED_EXTENSIONS.join(",")}
@@ -282,6 +283,7 @@ export function UploadPanel() {
           </div>
           <button
             type="button"
+            data-testid="knowledge-refresh"
             onClick={() => void refreshDocuments()}
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
             aria-label="刷新文档列表"
@@ -321,7 +323,7 @@ export function UploadPanel() {
               const deleting = deletingDocumentId === doc.document_id;
 
               return (
-                <div key={doc.document_id} className="bg-background/45">
+                <div key={doc.document_id} className="bg-background/45" data-testid="knowledge-document-row">
                   <div className="flex items-center gap-3 px-3 py-3">
                     <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <div className="min-w-0 flex-1">

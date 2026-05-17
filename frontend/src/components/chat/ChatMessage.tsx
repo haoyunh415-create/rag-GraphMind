@@ -153,6 +153,7 @@ export function ChatMessage({ message }: { message: Message }) {
 
   return (
     <div
+      data-testid={isUser ? "message-user" : "message-assistant"}
       className={cn(
         "flex gap-3 animate-slide-up",
         isUser ? "justify-end" : "justify-start",
@@ -192,7 +193,7 @@ export function ChatMessage({ message }: { message: Message }) {
         </div>
 
         {message.citations && message.citations.length > 0 && (
-          <div className="mt-4 border-t border-border/80 pt-3">
+          <div className="mt-4 border-t border-border/80 pt-3" data-testid="message-citations">
             <div className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
               <Quote className="h-3.5 w-3.5" />
               <span className="font-medium">引用来源</span>

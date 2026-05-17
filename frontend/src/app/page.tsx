@@ -106,6 +106,7 @@ export default function Home() {
               return (
                 <button
                   key={tab.id}
+                  data-testid={`tab-${tab.id}`}
                   role="tab"
                   aria-selected={isActive}
                   onClick={() => {
@@ -144,6 +145,7 @@ export default function Home() {
       <main id="main-content" className="flex-1 flex overflow-hidden">
         <div
           className={cn("flex-1 flex flex-col", activeTab !== "chat" && "hidden")}
+          data-testid="panel-chat"
           role="tabpanel"
           aria-label="对话"
         >
@@ -151,6 +153,7 @@ export default function Home() {
         </div>
         <div
           className={cn("flex-1 overflow-y-auto", activeTab !== "knowledge" && "hidden")}
+          data-testid="panel-knowledge"
           role="tabpanel"
           aria-label="知识库"
         >
@@ -158,6 +161,7 @@ export default function Home() {
         </div>
         <div
           className={cn("flex-1 overflow-y-auto", activeTab !== "trace" && "hidden")}
+          data-testid="panel-trace"
           role="tabpanel"
           aria-label="追踪"
         >

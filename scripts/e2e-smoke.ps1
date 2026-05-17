@@ -200,6 +200,7 @@ try {
     $env:SQLITE_DB_PATH = $DbPath
     $env:EMBEDDING_MODEL = "local-test"
     $env:OPENAI_API_KEY = ""
+    $env:CORS_ORIGINS = $FrontendUrl
     Start-ServiceProcess `
         -Name "backend" `
         -FilePath $BackendPython `

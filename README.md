@@ -56,6 +56,17 @@ grounded KB question, checks citations and trace events, then deletes the test
 document and stops the temporary services. Use `-KeepServices` if you want to
 leave the temporary services running after the test.
 
+Run the browser UI E2E test from the repository root:
+
+```powershell
+.\scripts\ui-e2e.ps1
+```
+
+The UI E2E test starts the same isolated services, then uses real Chrome via
+Playwright to upload a document through the page, verify the knowledge panel,
+ask a grounded question, check visible citations, and confirm the Trace panel
+contains a record.
+
 If PowerShell blocks local scripts, run them with:
 
 ```powershell

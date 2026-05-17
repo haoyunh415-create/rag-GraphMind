@@ -717,6 +717,7 @@ export function ChatPanel({ onTrace }: Props) {
             <div className="flex items-end gap-2 rounded-lg border border-border bg-card/80 p-2 shadow-sm transition-colors focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15">
               <input
                 ref={fileInputRef}
+                data-testid="chat-file-input"
                 type="file"
                 multiple
                 accept=".pdf,.docx,.txt,.md,.markdown,.html,.htm,.csv"
@@ -754,6 +755,7 @@ export function ChatPanel({ onTrace }: Props) {
                 ] as Array<[ChatMode, string]>).map(([mode, label]) => (
                   <button
                     key={mode}
+                    data-testid={`chat-mode-${mode}`}
                     type="button"
                     onClick={() => setChatMode(mode)}
                     disabled={streaming}
@@ -771,6 +773,7 @@ export function ChatPanel({ onTrace }: Props) {
               </div>
               <textarea
                 ref={inputRef}
+                data-testid="chat-input"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -791,6 +794,7 @@ export function ChatPanel({ onTrace }: Props) {
                 disabled={streaming || uploadingCount > 0}
               />
               <button
+                data-testid="chat-send"
                 onClick={streaming ? stopStreaming : handleSend}
                 disabled={!streaming && (!input.trim() || uploadingCount > 0)}
                 title={streaming ? "停止生成" : "发送"}
