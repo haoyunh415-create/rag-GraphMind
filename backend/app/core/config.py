@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # SQLite (local vector store)
     sqlite_db_path: str = "data/rag.db"
 
+    # Upload guardrails
+    max_upload_bytes: int = 25 * 1024 * 1024
+    allowed_upload_extensions: str = ".pdf,.docx,.txt,.md,.markdown,.html,.htm,.csv"
+
     # Redis
     redis_url: str = "redis://localhost:6379/0"
 
@@ -49,6 +53,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 
 @lru_cache()

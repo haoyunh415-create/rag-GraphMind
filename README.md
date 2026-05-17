@@ -9,6 +9,10 @@ Full-stack RAG application with a FastAPI backend, Next.js frontend, local SQLit
 .\scripts\smoke-test.ps1
 ```
 
+The smoke test checks backend health, frontend assets, document upload,
+chunk listing, KB-mode streaming chat, RAG evaluation metrics, and cleanup.
+Use `-SkipUpload` when you only want a fast health and frontend check.
+
 The development script starts:
 
 - Frontend: `http://127.0.0.1:3000`

@@ -25,7 +25,7 @@ function sourceLabel(source: string) {
     vector: "向量",
     graph: "图谱",
   };
-  return labels[source] || source || "来源";
+  return labels[source] || source || "未知来源";
 }
 
 function InlineMarkdown({ text }: { text: string }) {
@@ -73,10 +73,7 @@ function MarkdownAnswer({ content }: { content: string }) {
     if (line.startsWith("### ")) {
       flushList();
       blocks.push(
-        <h3
-          key={`heading-${blocks.length}`}
-          className="mb-2 mt-4 first:mt-0 text-[13px] font-semibold text-primary"
-        >
+        <h3 key={`heading-${blocks.length}`} className="mb-2 mt-4 first:mt-0 text-[13px] font-semibold text-primary">
           {line.slice(4)}
         </h3>,
       );
@@ -152,12 +149,7 @@ export function ChatMessage({ message }: { message: Message }) {
   const isUser = message.role === "user";
 
   return (
-    <div
-      className={cn(
-        "flex gap-3 animate-slide-up",
-        isUser ? "justify-end" : "justify-start",
-      )}
-    >
+    <div className={cn("flex gap-3 animate-slide-up", isUser ? "justify-end" : "justify-start")}>
       {!isUser && (
         <div className="mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 ring-1 ring-primary/20">
           <Bot className="h-4 w-4 text-primary" />
@@ -172,12 +164,7 @@ export function ChatMessage({ message }: { message: Message }) {
             : "w-full max-w-4xl border border-border/80 bg-card/95 px-5 py-4 shadow-sm",
         )}
       >
-        <div
-          className={cn(
-            message.streaming && "cursor-blink",
-            !message.content && !message.streaming && "text-muted-foreground italic",
-          )}
-        >
+        <div className={cn(message.streaming && "cursor-blink", !message.content && !message.streaming && "text-muted-foreground italic")}>
           {message.content ? (
             isUser ? (
               <p className="whitespace-pre-wrap leading-6">{message.content}</p>

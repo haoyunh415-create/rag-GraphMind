@@ -4,11 +4,12 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, HTTPException
 from loguru import logger
 
 from app.models.schemas import DocumentChunksResponse, DocumentUploadResponse
 from app.ingestion.pipeline import IngestionPipeline
+from app.core.config import get_settings
 from app.retrieval.vector_store import VectorStore
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
@@ -19,7 +20,26 @@ async def upload_document(file: UploadFile = File(...)):
     """Upload and ingest a document into the RAG pipeline."""
     doc_id = str(uuid.uuid4())
     filename = file.filename or "upload"
+    settings = get_settings()
+    suffix = Path(filename).suffix.lower()
+    allowed_extensions = {
+        item.strip().lower()
+        for item in settings.allowed_upload_extensions.split(",")
+        if item.strip()
+    }
+    if suffix not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{suffix or 'none'}'. Allowed: {', '.join(sorted(allowed_extensions))}",
+        )
+
     content = await file.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty")
+    if len(content) > settings.max_upload_bytes:
+        max_mb = settings.max_upload_bytes / (1024 * 1024)
+        raise HTTPException(status_code=413, detail=f"Uploaded file exceeds {max_mb:.1f} MB limit")
+
     content_hash = hashlib.sha256(content).hexdigest()
 
     vector_store = VectorStore()
@@ -35,7 +55,7 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     # Save uploaded file to temp
-    suffix = Path(filename).suffix or ".txt"
+    suffix = suffix or ".txt"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
         tmp_path = Path(tmp.name)

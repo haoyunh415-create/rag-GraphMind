@@ -91,7 +91,7 @@ class DocumentChunksResponse(BaseModel):
 
 
 class EvaluationRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=4000)
     expected_answer: Optional[str] = None
 
 
@@ -103,3 +103,13 @@ class EvaluationResult(BaseModel):
     context_recall: float
     context_precision: float
     latency_ms: float
+
+
+class EvaluationRecord(EvaluationResult):
+    id: int
+    created_at: str
+    expected_answer: Optional[str] = None
+
+
+class EvaluationHistoryResponse(BaseModel):
+    evaluations: list[EvaluationRecord] = Field(default_factory=list)

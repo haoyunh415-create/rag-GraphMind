@@ -1,27 +1,50 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
+import {
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  Database,
+  Layers,
+  Loader2,
+  MessageSquare,
+} from "lucide-react";
 import { ChatPanel } from "@/components/chat/ChatPanel";
 import { UploadPanel } from "@/components/knowledge/UploadPanel";
-import { TracePanel, type Trace } from "@/components/observability/TracePanel";
-import { Database, MessageSquare, Activity, Layers, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
-import { useState, useCallback, useEffect } from "react";
-import { cn } from "@/lib/utils";
+import {
+  TracePanel,
+  type EvaluationState,
+  type Trace,
+} from "@/components/observability/TracePanel";
 import { API_BASE, fetchApiHealth } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 type Tab = "chat" | "knowledge" | "trace";
+
+const tabs = [
+  { id: "chat" as const, label: "Chat", icon: MessageSquare },
+  { id: "knowledge" as const, label: "Knowledge", icon: Database },
+  { id: "trace" as const, label: "Trace", icon: Activity },
+];
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [traces, setTraces] = useState<Trace[]>([]);
+  const [evaluations, setEvaluations] = useState<Record<string, EvaluationState>>({});
   const [traceCount, setTraceCount] = useState(0);
   const [latestQueryId, setLatestQueryId] = useState<string | null>(null);
   const [apiStatus, setApiStatus] = useState<"checking" | "ok" | "error">("checking");
-  const [apiError, setApiError] = useState<string>("");
+  const [apiError, setApiError] = useState("");
 
   const handleNewTrace = useCallback((trace: Trace) => {
     setTraces((prev) => [trace, ...prev].slice(0, 50));
     setTraceCount((n) => n + 1);
     setLatestQueryId(trace.query_id);
+  }, []);
+
+  const handleEvaluation = useCallback((queryId: string, evaluation: EvaluationState) => {
+    setEvaluations((prev) => ({ ...prev, [queryId]: evaluation }));
   }, []);
 
   const refreshApiHealth = useCallback(async () => {
@@ -32,19 +55,13 @@ export default function Home() {
       setApiStatus("ok");
     } catch (error) {
       setApiStatus("error");
-      setApiError(error instanceof Error ? error.message : "后端连接失败");
+      setApiError(error instanceof Error ? error.message : "Cannot connect to backend API");
     }
   }, []);
 
   useEffect(() => {
     void refreshApiHealth();
   }, [refreshApiHealth]);
-
-  const tabs = [
-    { id: "chat" as const, label: "对话", icon: MessageSquare },
-    { id: "knowledge" as const, label: "知识库", icon: Database },
-    { id: "trace" as const, label: "追踪", icon: Activity },
-  ];
 
   return (
     <div
@@ -60,7 +77,7 @@ export default function Home() {
         href="#main-content"
         className="sr-only focus:not-sr-only focus:fixed focus:top-3 focus:left-3 focus:z-50 focus:px-4 focus:py-2 focus:bg-primary focus:text-primary-foreground focus:rounded-lg focus:text-sm"
       >
-        跳到主内容
+        Skip to main content
       </a>
 
       <header className="border-b border-border/80 px-5 py-3 flex items-center justify-between shrink-0 bg-background/92 backdrop-blur-sm">
@@ -69,11 +86,9 @@ export default function Home() {
             <Layers className="w-5 h-5 text-primary" />
           </div>
           <div className="flex flex-col min-w-0">
-            <span className="font-semibold text-sm leading-tight truncate">
-              知识图谱 RAG
-            </span>
+            <span className="font-semibold text-sm leading-tight truncate">Graph RAG Platform</span>
             <span className="text-[11px] text-muted-foreground leading-tight truncate">
-              多智能体检索平台
+              Hybrid retrieval, graph grounding, and quality scoring
             </span>
           </div>
         </div>
@@ -82,7 +97,7 @@ export default function Home() {
           <button
             type="button"
             onClick={() => void refreshApiHealth()}
-            title={apiStatus === "error" ? apiError : `API：${API_BASE}`}
+            title={apiStatus === "error" ? apiError : `API: ${API_BASE}`}
             className={cn(
               "hidden h-8 items-center gap-1.5 rounded-md border px-2 text-[11px] font-medium transition-colors sm:inline-flex",
               apiStatus === "ok" && "border-success/30 bg-success/10 text-success",
@@ -93,13 +108,13 @@ export default function Home() {
             {apiStatus === "ok" && <CheckCircle2 className="h-3.5 w-3.5" />}
             {apiStatus === "checking" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
             {apiStatus === "error" && <AlertCircle className="h-3.5 w-3.5" />}
-            <span>{apiStatus === "ok" ? "API 正常" : apiStatus === "checking" ? "检查中" : "API 离线"}</span>
+            <span>{apiStatus === "ok" ? "API OK" : apiStatus === "checking" ? "Checking" : "API Error"}</span>
           </button>
 
           <nav
             className="flex items-center gap-1 rounded-lg border border-border/70 bg-card/70 p-1"
             role="tablist"
-            aria-label="主导航"
+            aria-label="Main navigation"
           >
             {tabs.map((tab) => {
               const isActive = activeTab === tab.id;
@@ -126,9 +141,7 @@ export default function Home() {
                     <span
                       className={cn(
                         "ml-0.5 min-w-4 rounded-full px-1 text-[10px] leading-4",
-                        isActive
-                          ? "bg-primary/20 text-primary"
-                          : "bg-accent text-accent-foreground",
+                        isActive ? "bg-primary/20 text-primary" : "bg-accent text-accent-foreground",
                       )}
                     >
                       {traceCount > 99 ? "99+" : traceCount}
@@ -142,26 +155,14 @@ export default function Home() {
       </header>
 
       <main id="main-content" className="flex-1 flex overflow-hidden">
-        <div
-          className={cn("flex-1 flex flex-col", activeTab !== "chat" && "hidden")}
-          role="tabpanel"
-          aria-label="对话"
-        >
-          <ChatPanel onTrace={handleNewTrace} />
+        <div className={cn("flex-1 flex flex-col", activeTab !== "chat" && "hidden")} role="tabpanel" aria-label="Chat">
+          <ChatPanel onTrace={handleNewTrace} onEvaluation={handleEvaluation} />
         </div>
-        <div
-          className={cn("flex-1 overflow-y-auto", activeTab !== "knowledge" && "hidden")}
-          role="tabpanel"
-          aria-label="知识库"
-        >
-          <UploadPanel />
+        <div className={cn("flex-1 overflow-y-auto", activeTab !== "knowledge" && "hidden")} role="tabpanel" aria-label="Knowledge base">
+          <UploadPanel traces={traces} evaluations={evaluations} />
         </div>
-        <div
-          className={cn("flex-1 overflow-y-auto", activeTab !== "trace" && "hidden")}
-          role="tabpanel"
-          aria-label="追踪"
-        >
-          <TracePanel traces={traces} latestQueryId={latestQueryId} />
+        <div className={cn("flex-1 overflow-y-auto", activeTab !== "trace" && "hidden")} role="tabpanel" aria-label="Trace">
+          <TracePanel traces={traces} latestQueryId={latestQueryId} evaluations={evaluations} />
         </div>
       </main>
     </div>

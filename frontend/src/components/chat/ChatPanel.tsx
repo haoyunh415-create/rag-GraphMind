@@ -1,23 +1,23 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
-  Send,
-  Plus,
-  Sparkles,
   ChevronDown,
-  Upload,
   MessageSquare,
-  Trash2,
   PanelLeftClose,
   PanelLeftOpen,
+  Plus,
+  Send,
+  Sparkles,
   Square,
+  Trash2,
+  Upload,
   X,
 } from "lucide-react";
 import { ChatMessage, type Message } from "./ChatMessage";
-import type { Trace } from "@/components/observability/TracePanel";
-import { streamChat, uploadDocument } from "@/lib/api";
+import type { EvaluationState, Trace } from "@/components/observability/TracePanel";
+import { evaluateRag, streamChat, uploadDocument } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 let nextId = 0;
@@ -37,6 +37,7 @@ interface ConversationRecord {
 
 interface Props {
   onTrace?: (trace: Trace) => void;
+  onEvaluation?: (queryId: string, evaluation: EvaluationState) => void;
 }
 
 type StreamStepKey = "queued" | "routing" | "decomposing" | "retrieving" | "ranking" | "generating";
@@ -45,12 +46,12 @@ type BackendStatuses = Record<string, { available: boolean; detail?: string }>;
 type ErrorBanner = { title: string; message: string };
 
 const STREAM_STEPS: Array<{ key: StreamStepKey; label: string }> = [
-  { key: "queued", label: "准备" },
-  { key: "routing", label: "路由" },
-  { key: "decomposing", label: "分解" },
-  { key: "retrieving", label: "检索" },
-  { key: "ranking", label: "排序" },
-  { key: "generating", label: "生成" },
+  { key: "queued", label: "Queued" },
+  { key: "routing", label: "Route" },
+  { key: "decomposing", label: "Split" },
+  { key: "retrieving", label: "Search" },
+  { key: "ranking", label: "Rank" },
+  { key: "generating", label: "Answer" },
 ];
 
 const STATUS_TO_STEP: Record<string, StreamStepKey> = {
@@ -60,6 +61,12 @@ const STATUS_TO_STEP: Record<string, StreamStepKey> = {
   retrieving: "retrieving",
   ranking: "ranking",
   generating: "generating",
+};
+
+const MODE_LABELS: Record<ChatMode, string> = {
+  auto: "Auto",
+  kb: "KB",
+  chat: "Chat",
 };
 
 function formatLatency(ms: number | null) {
@@ -104,25 +111,12 @@ function StreamStatusBar({
                       : "border-border bg-background/45",
                 )}
               >
-                <span
-                  className={cn(
-                    "h-1.5 w-1.5 rounded-full",
-                    isActive
-                      ? "animate-pulse bg-primary"
-                      : isDone
-                        ? "bg-success"
-                        : "bg-muted-foreground/35",
-                  )}
-                />
+                <span className={cn("h-1.5 w-1.5 rounded-full", isActive ? "animate-pulse bg-primary" : isDone ? "bg-success" : "bg-muted-foreground/35")} />
                 <span>{step.label}</span>
               </div>
             );
           })}
-          {statusText && (
-            <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/80">
-              {statusText}
-            </span>
-          )}
+          {statusText && <span className="min-w-0 truncate font-mono text-[11px] text-muted-foreground/80">{statusText}</span>}
           {backendStatuses && (
             <div className="flex flex-wrap items-center gap-1.5">
               {(["vector", "bm25", "graph"] as const).map((name) => {
@@ -134,9 +128,7 @@ function StreamStatusBar({
                     title={backend?.detail || ""}
                     className={cn(
                       "rounded-md border px-1.5 py-0.5 font-mono text-[11px]",
-                      available
-                        ? "border-success/35 bg-success/10 text-success"
-                        : "border-warning/35 bg-warning/10 text-warning",
+                      available ? "border-success/35 bg-success/10 text-success" : "border-warning/35 bg-warning/10 text-warning",
                     )}
                   >
                     {name}:{available ? "on" : "off"}
@@ -147,14 +139,14 @@ function StreamStatusBar({
           )}
         </div>
         <div className="shrink-0 rounded-md border border-border bg-background/55 px-2 py-1 font-mono text-[11px] text-foreground">
-          首字 {formatLatency(firstTokenMs)}
+          first token {formatLatency(firstTokenMs)}
         </div>
       </div>
     </div>
   );
 }
 
-function conversationTitle(messages: Message[], fallback = "新对话") {
+function conversationTitle(messages: Message[], fallback = "New chat") {
   const firstUser = messages.find((msg) => msg.role === "user");
   if (!firstUser?.content.trim()) return fallback;
   const title = firstUser.content.trim().replace(/\s+/g, " ");
@@ -172,7 +164,7 @@ function loadConversations(): ConversationRecord[] {
       .filter((item) => item?.id && Array.isArray(item.messages))
       .map((item) => ({
         id: String(item.id),
-        title: String(item.title || "新对话"),
+        title: String(item.title || "New chat"),
         updatedAt: Number(item.updatedAt || Date.now()),
         messages: item.messages,
       }));
@@ -183,29 +175,18 @@ function loadConversations(): ConversationRecord[] {
 
 function saveConversations(conversations: ConversationRecord[]) {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(
-    HISTORY_STORAGE_KEY,
-    JSON.stringify(conversations.slice(0, 30)),
-  );
+  window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(conversations.slice(0, 30)));
 }
 
 function formatHistoryTime(timestamp: number) {
   const date = new Date(timestamp);
   const now = new Date();
   const isToday = date.toDateString() === now.toDateString();
-  if (isToday) {
-    return date.toLocaleTimeString("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
-  return date.toLocaleDateString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-  });
+  if (isToday) return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+  return date.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
-export function ChatPanel({ onTrace }: Props) {
+export function ChatPanel({ onTrace, onEvaluation }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [chatMode, setChatMode] = useState<ChatMode>("auto");
@@ -229,6 +210,7 @@ export function ChatPanel({ onTrace }: Props) {
   const uploadTasksRef = useRef<Promise<void>[]>([]);
   const streamStartedAtRef = useRef(0);
   const firstTokenSeenRef = useRef(false);
+  const evaluatedTraceIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const stored = loadConversations();
@@ -245,12 +227,7 @@ export function ChatPanel({ onTrace }: Props) {
   }, [messages]);
 
   useEffect(() => {
-    if (shouldAutoScroll) {
-      scrollRef.current?.scrollTo({
-        top: scrollRef.current.scrollHeight,
-        behavior: "smooth",
-      });
-    }
+    if (shouldAutoScroll) scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
   }, [messages, shouldAutoScroll]);
 
   useEffect(() => {
@@ -260,9 +237,7 @@ export function ChatPanel({ onTrace }: Props) {
     inputEl.style.height = `${Math.min(inputEl.scrollHeight, 132)}px`;
   }, [input]);
 
-  useEffect(() => {
-    return () => abortControllerRef.current?.abort();
-  }, []);
+  useEffect(() => () => abortControllerRef.current?.abort(), []);
 
   const updateConversation = useCallback((id: string, nextMessages: Message[]) => {
     if (nextMessages.length === 0) return;
@@ -270,7 +245,7 @@ export function ChatPanel({ onTrace }: Props) {
       const existing = prev.find((item) => item.id === id);
       const nextRecord: ConversationRecord = {
         id,
-        title: conversationTitle(nextMessages, existing?.title || "新对话"),
+        title: conversationTitle(nextMessages, existing?.title || "New chat"),
         updatedAt: Date.now(),
         messages: nextMessages,
       };
@@ -280,12 +255,25 @@ export function ChatPanel({ onTrace }: Props) {
     });
   }, []);
 
+  const handleTrace = useCallback((trace: Trace) => {
+    onTrace?.(trace);
+    if (!onEvaluation || evaluatedTraceIdsRef.current.has(trace.query_id)) return;
+    evaluatedTraceIdsRef.current.add(trace.query_id);
+    onEvaluation(trace.query_id, { status: "running" });
+    void evaluateRag(trace.original_query)
+      .then((result) => onEvaluation(trace.query_id, { status: "done", result }))
+      .catch((error) => {
+        onEvaluation(trace.query_id, {
+          status: "error",
+          error: error instanceof Error ? error.message : "Evaluation failed",
+        });
+      });
+  }, [onEvaluation, onTrace]);
+
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const threshold = 80;
-    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-    setShouldAutoScroll(atBottom);
+    setShouldAutoScroll(el.scrollHeight - el.scrollTop - el.clientHeight < 80);
   }, []);
 
   const newChat = useCallback(() => {
@@ -301,55 +289,42 @@ export function ChatPanel({ onTrace }: Props) {
     setShouldAutoScroll(true);
   }, [streaming]);
 
-  const selectConversation = useCallback(
-    (conversation: ConversationRecord) => {
-      if (streaming) return;
-      setConversationId(conversation.id);
-      setMessages(conversation.messages);
-      messagesRef.current = conversation.messages;
-      setStatusText("");
-      setActiveStep(null);
-      setFirstTokenMs(null);
-      setBackendStatuses(null);
-      setErrorBanner(null);
-      setShouldAutoScroll(true);
-    },
-    [streaming],
-  );
+  const selectConversation = useCallback((conversation: ConversationRecord) => {
+    if (streaming) return;
+    setConversationId(conversation.id);
+    setMessages(conversation.messages);
+    messagesRef.current = conversation.messages;
+    setStatusText("");
+    setActiveStep(null);
+    setFirstTokenMs(null);
+    setBackendStatuses(null);
+    setErrorBanner(null);
+    setShouldAutoScroll(true);
+  }, [streaming]);
 
-  const deleteConversation = useCallback(
-    (id: string) => {
-      if (streaming) return;
-      setConversations((prev) => {
-        const next = prev.filter((item) => item.id !== id);
-        saveConversations(next);
-        if (conversationId === id) {
-          setConversationId(next[0]?.id || null);
-          setMessages(next[0]?.messages || []);
-          messagesRef.current = next[0]?.messages || [];
-          setStatusText("");
-          setActiveStep(null);
-          setFirstTokenMs(null);
-          setBackendStatuses(null);
-          setErrorBanner(null);
-        }
-        return next;
-      });
-    },
-    [conversationId, streaming],
-  );
+  const deleteConversation = useCallback((id: string) => {
+    if (streaming) return;
+    setConversations((prev) => {
+      const next = prev.filter((item) => item.id !== id);
+      saveConversations(next);
+      if (conversationId === id) {
+        setConversationId(next[0]?.id || null);
+        setMessages(next[0]?.messages || []);
+        messagesRef.current = next[0]?.messages || [];
+      }
+      return next;
+    });
+  }, [conversationId, streaming]);
 
   const stopStreaming = useCallback(() => {
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
     setStreaming(false);
-    setStatusText("已停止生成");
+    setStatusText("Stopped");
     setActiveStep("done");
     setMessages((prev) => {
       const next = prev.map((msg, index) =>
-        index === prev.length - 1 && msg.role === "assistant"
-          ? { ...msg, streaming: false }
-          : msg,
+        index === prev.length - 1 && msg.role === "assistant" ? { ...msg, streaming: false } : msg,
       );
       messagesRef.current = next;
       if (conversationId) updateConversation(conversationId, next);
@@ -363,18 +338,14 @@ export function ChatPanel({ onTrace }: Props) {
 
     setChatMode("kb");
     setUploadingCount((count) => count + files.length);
-    setStatusText(`上传中：${files.length} 个文档，请稍候再提问`);
+    setStatusText(`Uploading ${files.length} file(s)...`);
 
     const tasks = files.map(async (file) => {
       try {
         const result = await uploadDocument(file);
-        setStatusText(`已上传：${file.name}，${result.chunk_count || 0} 个片段`);
+        setStatusText(`Uploaded ${file.name}; ${result.chunk_count || 0} chunks`);
       } catch (error) {
-        setStatusText(
-          `上传失败：${file.name} - ${
-            error instanceof Error ? error.message : "未知错误"
-          }`,
-        );
+        setStatusText(`Upload failed: ${file.name} - ${error instanceof Error ? error.message : "unknown error"}`);
       } finally {
         setUploadingCount((count) => Math.max(0, count - 1));
       }
@@ -393,7 +364,7 @@ export function ChatPanel({ onTrace }: Props) {
     if (!query || streaming) return;
 
     if (uploadTasksRef.current.length > 0) {
-      setStatusText("正在等待文档入库完成");
+      setStatusText("Waiting for uploads...");
       await Promise.allSettled(uploadTasksRef.current);
     }
 
@@ -403,7 +374,7 @@ export function ChatPanel({ onTrace }: Props) {
     setInput("");
     setShouldAutoScroll(true);
     setStreaming(true);
-    setStatusText("queued: Preparing request");
+    setStatusText("queued: preparing request");
     setActiveStep("queued");
     setFirstTokenMs(null);
     setBackendStatuses(null);
@@ -437,10 +408,7 @@ export function ChatPanel({ onTrace }: Props) {
         }
         setMessages((prev) => {
           const next = [...prev];
-          next[assistantIdx] = {
-            ...next[assistantIdx],
-            content: next[assistantIdx].content + text,
-          };
+          next[assistantIdx] = { ...next[assistantIdx], content: next[assistantIdx].content + text };
           messagesRef.current = next;
           updateConversation(convId, next);
           return next;
@@ -458,13 +426,9 @@ export function ChatPanel({ onTrace }: Props) {
       (status: string, detail: string, data?: any) => {
         setActiveStep(STATUS_TO_STEP[status] || "queued");
         setStatusText(`${status}: ${detail}`);
-        if (data?.backends) {
-          setBackendStatuses(data.backends);
-        }
+        if (data?.backends) setBackendStatuses(data.backends);
       },
-      (trace: Trace) => {
-        onTrace?.(trace);
-      },
+      handleTrace,
       () => {
         const wasAborted = controller.signal.aborted;
         setMessages((prev) => {
@@ -477,18 +441,14 @@ export function ChatPanel({ onTrace }: Props) {
         setStreaming(false);
         abortControllerRef.current = null;
         setActiveStep("done");
-        setStatusText(wasAborted ? "已停止生成" : "");
+        setStatusText(wasAborted ? "Stopped" : "");
       },
       (err) => {
-        const message = err.message || "未知错误";
-        setErrorBanner({ title: "请求失败", message });
+        const message = err.message || "Unknown error";
+        setErrorBanner({ title: "Request failed", message });
         setMessages((prev) => {
           const next = [...prev];
-          next[assistantIdx] = {
-            ...next[assistantIdx],
-            content: `请求失败：${message}`,
-            streaming: false,
-          };
+          next[assistantIdx] = { ...next[assistantIdx], content: `Request failed: ${message}`, streaming: false };
           messagesRef.current = next;
           updateConversation(convId, next);
           return next;
@@ -496,7 +456,7 @@ export function ChatPanel({ onTrace }: Props) {
         setStreaming(false);
         abortControllerRef.current = null;
         setActiveStep(null);
-        setStatusText("请求失败");
+        setStatusText("Request failed");
       },
     );
   };
@@ -524,27 +484,16 @@ export function ChatPanel({ onTrace }: Props) {
         await uploadFiles(e.dataTransfer.files);
       }}
     >
-      <aside
-        className={cn(
-          "hidden shrink-0 border-r border-border/80 bg-card/45 md:flex md:flex-col",
-          historyOpen ? "w-64" : "w-12",
-        )}
-      >
+      <aside className={cn("hidden shrink-0 border-r border-border/80 bg-card/45 md:flex md:flex-col", historyOpen ? "w-64" : "w-12")}>
         <div className="flex h-14 items-center justify-between border-b border-border/70 px-3">
-          {historyOpen && (
-            <span className="text-xs font-semibold text-foreground">历史记录</span>
-          )}
+          {historyOpen && <span className="text-xs font-semibold text-foreground">History</span>}
           <button
             type="button"
             onClick={() => setHistoryOpen((open) => !open)}
             className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/70 hover:text-foreground"
-            aria-label={historyOpen ? "收起历史记录" : "展开历史记录"}
+            aria-label={historyOpen ? "Collapse history" : "Expand history"}
           >
-            {historyOpen ? (
-              <PanelLeftClose className="h-4 w-4" />
-            ) : (
-              <PanelLeftOpen className="h-4 w-4" />
-            )}
+            {historyOpen ? <PanelLeftClose className="h-4 w-4" /> : <PanelLeftOpen className="h-4 w-4" />}
           </button>
         </div>
 
@@ -559,16 +508,14 @@ export function ChatPanel({ onTrace }: Props) {
             )}
           >
             <Plus className="h-4 w-4" />
-            {historyOpen && <span>新对话</span>}
+            {historyOpen && <span>New chat</span>}
           </button>
         </div>
 
         {historyOpen && (
           <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
             {conversations.length === 0 ? (
-              <div className="px-2 py-8 text-center text-xs leading-5 text-muted-foreground">
-                还没有历史会话
-              </div>
+              <div className="px-2 py-8 text-center text-xs leading-5 text-muted-foreground">No saved chats yet</div>
             ) : (
               <div className="space-y-1">
                 {conversations.map((conversation) => {
@@ -578,9 +525,7 @@ export function ChatPanel({ onTrace }: Props) {
                       key={conversation.id}
                       className={cn(
                         "group flex items-center gap-2 rounded-md px-2 py-2 transition-colors",
-                        isActive
-                          ? "bg-primary/12 text-primary"
-                          : "text-muted-foreground hover:bg-muted/55 hover:text-foreground",
+                        isActive ? "bg-primary/12 text-primary" : "text-muted-foreground hover:bg-muted/55 hover:text-foreground",
                       )}
                     >
                       <button
@@ -590,19 +535,15 @@ export function ChatPanel({ onTrace }: Props) {
                         className="min-w-0 flex flex-1 items-center gap-2 text-left disabled:cursor-not-allowed"
                       >
                         <MessageSquare className="h-3.5 w-3.5 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                          {conversation.title}
-                        </span>
-                        <span className="shrink-0 text-[10px] text-muted-foreground/70">
-                          {formatHistoryTime(conversation.updatedAt)}
-                        </span>
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium">{conversation.title}</span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground/70">{formatHistoryTime(conversation.updatedAt)}</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => deleteConversation(conversation.id)}
                         disabled={streaming}
                         className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/60 opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100 disabled:cursor-not-allowed"
-                        aria-label="删除历史会话"
+                        aria-label="Delete chat"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -622,44 +563,34 @@ export function ChatPanel({ onTrace }: Props) {
               <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-primary/15">
                 <Upload className="h-6 w-6 text-primary" />
               </div>
-              <p className="text-sm font-medium text-foreground">松开即可上传文档</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                支持 PDF、Word、Markdown、HTML、TXT、CSV
-              </p>
+              <p className="text-sm font-medium text-foreground">Drop files to upload</p>
+              <p className="mt-1 text-xs text-muted-foreground">PDF, Word, Markdown, HTML, TXT, CSV</p>
             </div>
           </div>
         )}
 
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="flex-1 overflow-y-auto px-4 py-6"
-        >
+        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto px-4 py-6">
           <div className="mx-auto flex w-full max-w-5xl flex-col gap-4">
             {messages.length === 0 ? (
               <div className="flex min-h-[55vh] flex-col items-center justify-center px-4 text-center animate-fade-in">
                 <div className="mb-5 flex h-14 w-14 items-center justify-center rounded-lg bg-primary/12 ring-1 ring-primary/25">
                   <Sparkles className="h-7 w-7 text-primary" />
                 </div>
-                <p className="text-lg font-semibold text-foreground">
-                  开始一次知识库问答
-                </p>
+                <p className="text-lg font-semibold text-foreground">Ask a grounded question</p>
                 <p className="mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-                  可以直接提问，也可以把文档拖到这里上传后进行知识库问答。
+                  Upload documents or ask directly. Auto mode decides whether to search the knowledge base.
                 </p>
               </div>
             ) : (
               <div className="flex items-center justify-between pb-1">
-                <span className="text-xs text-muted-foreground">
-                  {messages.length} 条消息
-                </span>
+                <span className="text-xs text-muted-foreground">{messages.length} messages</span>
                 <button
                   onClick={newChat}
                   disabled={streaming}
                   className="flex h-8 items-center gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   <Plus className="h-3.5 w-3.5" />
-                  新对话
+                  New chat
                 </button>
               </div>
             )}
@@ -674,24 +605,16 @@ export function ChatPanel({ onTrace }: Props) {
           <button
             onClick={() => {
               setShouldAutoScroll(true);
-              scrollRef.current?.scrollTo({
-                top: scrollRef.current.scrollHeight,
-                behavior: "smooth",
-              });
+              scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
             }}
             className="absolute bottom-36 left-1/2 z-10 -translate-x-1/2 rounded-full border border-border bg-card p-1.5 shadow-lg transition-colors hover:bg-muted"
-            aria-label="滚动到底部"
+            aria-label="Scroll to bottom"
           >
             <ChevronDown className="h-4 w-4 text-muted-foreground" />
           </button>
         )}
 
-        <StreamStatusBar
-          activeStep={activeStep}
-          firstTokenMs={firstTokenMs}
-          statusText={statusText}
-          backendStatuses={backendStatuses}
-        />
+        <StreamStatusBar activeStep={activeStep} firstTokenMs={firstTokenMs} statusText={statusText} backendStatuses={backendStatuses} />
 
         <div className="border-t border-border bg-background/92 p-4 backdrop-blur-sm">
           <div className="mx-auto max-w-5xl">
@@ -700,15 +623,13 @@ export function ChatPanel({ onTrace }: Props) {
                 <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium">{errorBanner.title}</div>
-                  <div className="mt-1 break-words text-xs leading-5 text-destructive/90">
-                    {errorBanner.message}
-                  </div>
+                  <div className="mt-1 break-words text-xs leading-5 text-destructive/90">{errorBanner.message}</div>
                 </div>
                 <button
                   type="button"
                   onClick={() => setErrorBanner(null)}
                   className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-destructive/80 transition-colors hover:bg-destructive/10 hover:text-destructive"
-                  aria-label="关闭错误提示"
+                  aria-label="Close error"
                 >
                   <X className="h-3.5 w-3.5" />
                 </button>
@@ -726,32 +647,24 @@ export function ChatPanel({ onTrace }: Props) {
                   e.target.value = "";
                 }}
                 className="hidden"
-                aria-label="上传知识库文档"
+                aria-label="Upload files"
               />
               <div className="flex shrink-0 flex-col gap-1 sm:flex-row">
                 <button
                   type="button"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={streaming || uploadingCount > 0}
-                  title={uploadingCount > 0 ? "文档上传中" : "上传文档"}
-                  aria-label="上传文档"
+                  title={uploadingCount > 0 ? "Uploading" : "Upload files"}
+                  aria-label="Upload files"
                   className={cn(
                     "flex h-8 w-8 items-center justify-center rounded-md border text-muted-foreground transition-colors",
                     "border-border bg-background/45 hover:bg-muted/60 hover:text-foreground",
                     "disabled:cursor-not-allowed disabled:opacity-60",
                   )}
                 >
-                  {uploadingCount > 0 ? (
-                    <Upload className="h-3.5 w-3.5 animate-pulse" />
-                  ) : (
-                    <Upload className="h-3.5 w-3.5" />
-                  )}
+                  <Upload className={cn("h-3.5 w-3.5", uploadingCount > 0 && "animate-pulse")} />
                 </button>
-                {([
-                  ["auto", "自动"],
-                  ["kb", "知识库"],
-                  ["chat", "聊天"],
-                ] as Array<[ChatMode, string]>).map(([mode, label]) => (
+                {(Object.keys(MODE_LABELS) as ChatMode[]).map((mode) => (
                   <button
                     key={mode}
                     type="button"
@@ -765,7 +678,7 @@ export function ChatPanel({ onTrace }: Props) {
                       "disabled:cursor-not-allowed disabled:opacity-60",
                     )}
                   >
-                    {label}
+                    {MODE_LABELS[mode]}
                   </button>
                 ))}
               </div>
@@ -776,25 +689,23 @@ export function ChatPanel({ onTrace }: Props) {
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
-                    handleSend();
+                    void handleSend();
                   }
                 }}
-                placeholder="输入问题，按 Enter 发送..."
-                aria-label="输入问题"
+                placeholder="Ask a question, press Enter to send..."
+                aria-label="Question"
                 rows={1}
                 className={cn(
                   "max-h-32 min-h-10 flex-1 resize-none bg-transparent px-2 py-2 text-sm leading-6",
-                  "placeholder:text-muted-foreground/60",
-                  "focus:outline-none",
-                  "disabled:cursor-not-allowed disabled:opacity-50",
+                  "placeholder:text-muted-foreground/60 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
                 )}
                 disabled={streaming || uploadingCount > 0}
               />
               <button
-                onClick={streaming ? stopStreaming : handleSend}
+                onClick={streaming ? stopStreaming : () => void handleSend()}
                 disabled={!streaming && (!input.trim() || uploadingCount > 0)}
-                title={streaming ? "停止生成" : "发送"}
-                aria-label="发送"
+                title={streaming ? "Stop" : "Send"}
+                aria-label={streaming ? "Stop" : "Send"}
                 className={cn(
                   "flex h-10 w-10 shrink-0 items-center justify-center rounded-md transition-colors",
                   "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
@@ -806,11 +717,7 @@ export function ChatPanel({ onTrace }: Props) {
                   "disabled:cursor-not-allowed",
                 )}
               >
-                {streaming ? (
-                  <Square className="h-4 w-4 fill-current" />
-                ) : (
-                  <Send className="h-5 w-5" />
-                )}
+                {streaming ? <Square className="h-4 w-4 fill-current" /> : <Send className="h-5 w-5" />}
               </button>
             </div>
           </div>
