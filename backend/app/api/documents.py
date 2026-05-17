@@ -4,22 +4,56 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File
+from fastapi import APIRouter, UploadFile, File, HTTPException, status as http_status
 from loguru import logger
 
+from app.core.config import get_settings
 from app.models.schemas import DocumentChunksResponse, DocumentUploadResponse
 from app.ingestion.pipeline import IngestionPipeline
 from app.retrieval.vector_store import VectorStore
 
 router = APIRouter(prefix="/api/documents", tags=["documents"])
 
+SUPPORTED_EXTENSIONS = {
+    ".pdf",
+    ".docx",
+    ".txt",
+    ".md",
+    ".markdown",
+    ".html",
+    ".htm",
+    ".csv",
+}
+
 
 @router.post("/upload", response_model=DocumentUploadResponse)
 async def upload_document(file: UploadFile = File(...)):
     """Upload and ingest a document into the RAG pipeline."""
+    settings = get_settings()
     doc_id = str(uuid.uuid4())
     filename = file.filename or "upload"
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(
+            status_code=http_status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=(
+                "Unsupported document type. Supported extensions: "
+                + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            ),
+        )
+
     content = await file.read()
+    if not content:
+        raise HTTPException(
+            status_code=http_status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded document is empty.",
+        )
+    if len(content) > settings.max_upload_bytes:
+        raise HTTPException(
+            status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"Uploaded document exceeds the {settings.max_upload_bytes} byte limit.",
+        )
+
     content_hash = hashlib.sha256(content).hexdigest()
 
     vector_store = VectorStore()
@@ -35,7 +69,6 @@ async def upload_document(file: UploadFile = File(...)):
         )
 
     # Save uploaded file to temp
-    suffix = Path(filename).suffix or ".txt"
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(content)
         tmp_path = Path(tmp.name)

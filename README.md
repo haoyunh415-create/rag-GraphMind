@@ -14,6 +14,48 @@ The development script starts:
 - Frontend: `http://127.0.0.1:3000`
 - Backend: `http://127.0.0.1:8001`
 
+The stable demo flow is:
+
+1. Upload a supported document from the chat panel or knowledge-base panel.
+2. Wait until the upload result reports indexed chunks.
+3. Ask a question in Auto or KB mode.
+4. Review the answer, citations, and retrieval trace.
+
+Supported upload extensions are `.pdf`, `.docx`, `.txt`, `.md`, `.markdown`,
+`.html`, `.htm`, and `.csv`. The default upload limit is 10 MB and can be
+changed with `MAX_UPLOAD_BYTES`.
+
+The `/api/kb/evaluate` endpoint is intentionally disabled in this stable build.
+It returns HTTP 501 until real RAG quality scoring is wired into the chat flow.
+This avoids showing placeholder quality scores as if they were real evaluation results.
+
+## Verification
+
+Run backend contract tests from the repository root:
+
+```powershell
+.\scripts\test-backend.ps1
+```
+
+Run the frontend production build:
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+Run the full local E2E smoke test from the repository root:
+
+```powershell
+.\scripts\e2e-smoke.ps1
+```
+
+The E2E smoke test starts temporary backend and frontend services on isolated
+ports, uploads a document, verifies document listing and chunk preview, asks a
+grounded KB question, checks citations and trace events, then deletes the test
+document and stops the temporary services. Use `-KeepServices` if you want to
+leave the temporary services running after the test.
+
 If PowerShell blocks local scripts, run them with:
 
 ```powershell

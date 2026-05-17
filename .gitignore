@@ -34,12 +34,14 @@ out/
 data/
 uploads/
 backend/data/
+.e2e-data/
 *.db
 *.db-shm
 *.db-wal
 
 # Logs
 *.log
+*.log.err
 
 # Local scratch
 -Context

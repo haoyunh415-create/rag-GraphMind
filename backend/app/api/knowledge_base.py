@@ -1,5 +1,5 @@
 import asyncio
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException, status
 from loguru import logger
 
 from app.models.schemas import (
@@ -60,13 +60,11 @@ async def list_documents():
 
 @router.post("/evaluate", response_model=EvaluationResult)
 async def evaluate_rag(request: EvaluationRequest):
-    """Run RAGAS evaluation on a query."""
-    return EvaluationResult(
-        query=request.query,
-        answer="",
-        faithfulness=0.0,
-        answer_relevancy=0.0,
-        context_recall=0.0,
-        context_precision=0.0,
-        latency_ms=0.0,
+    """Evaluation is intentionally disabled until real scoring is wired in."""
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "RAG quality evaluation is not enabled in this stable build. "
+            "The chat, upload, citation, and trace flow remain available."
+        ),
     )

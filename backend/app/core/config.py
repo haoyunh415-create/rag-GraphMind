@@ -1,8 +1,11 @@
 from pydantic_settings import BaseSettings
+from pydantic_settings import SettingsConfigDict
 from functools import lru_cache
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
     app_name: str = "Graph RAG Platform"
     debug: bool = False
     cors_origins: str = "http://localhost:3000,http://localhost:3001,http://127.0.0.1:3000,http://127.0.0.1:3001"
@@ -42,13 +45,11 @@ class Settings(BaseSettings):
     # Chunking
     chunk_size: int = 512
     chunk_overlap: int = 64
+    max_upload_bytes: int = 10 * 1024 * 1024
 
     # Retrieval
     top_k: int = 10
     rerank_top_k: int = 5
-
-    class Config:
-        env_file = ".env"
 
 
 @lru_cache()
