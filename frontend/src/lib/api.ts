@@ -14,7 +14,9 @@ function isAbortError(err: unknown) {
 
 function connectError(err: unknown) {
   const detail = err instanceof Error ? err.message : "unknown error";
-  return new Error(`Cannot connect to backend API (${API_BASE}). Confirm the backend is running on port 8001. ${detail}`);
+  return new Error(
+    `无法连接后端 API（${API_BASE}）。请先运行 .\\scripts\\start-dev.ps1，确认 8001 端口可访问。原始错误：${detail}`,
+  );
 }
 
 async function readJson(response: Response) {
@@ -29,7 +31,7 @@ async function readJson(response: Response) {
 
 function responseError(response: Response, data: any, fallback: string) {
   const detail = data?.detail || data?.message || fallback;
-  return new Error(`${detail} (HTTP ${response.status}, API: ${API_BASE})`);
+  return new Error(`${detail}（HTTP ${response.status}，API：${API_BASE}）`);
 }
 
 export async function streamChat(
@@ -63,7 +65,7 @@ export async function streamChat(
 
   if (!response.ok || !response.body) {
     const data = await readJson(response);
-    onError(responseError(response, data, "Chat request failed"));
+    onError(responseError(response, data, "对话请求失败"));
     return;
   }
 
@@ -80,10 +82,9 @@ export async function streamChat(
         onDone();
         return;
       }
-      onError(err instanceof Error ? err : new Error("Failed to read streamed response"));
+      onError(err instanceof Error ? err : new Error("流式响应读取失败"));
       return;
     }
-
     const { done, value } = result;
     if (done) break;
 
@@ -111,7 +112,7 @@ export async function streamChat(
             break;
         }
       } catch {
-        // Ignore incomplete SSE lines.
+        // ignore parse errors on partial lines
       }
     }
   }
@@ -132,7 +133,7 @@ export async function uploadDocument(file: File) {
   }
   const data = await readJson(res);
   if (!res.ok || data.status === "error") {
-    throw responseError(res, data, `Upload failed: ${file.name}`);
+    throw responseError(res, data, `上传失败：${file.name}`);
   }
   return data;
 }
@@ -154,44 +155,10 @@ export interface KnowledgeChunk {
   text: string;
 }
 
-export interface EvaluationResult {
-  query: string;
-  answer: string;
-  faithfulness: number;
-  answer_relevancy: number;
-  context_recall: number;
-  context_precision: number;
-  latency_ms: number;
-}
-
-export interface EvaluationRecord extends EvaluationResult {
-  id: number;
-  created_at: string;
-  expected_answer?: string | null;
-}
-
-export async function evaluateRag(query: string, expectedAnswer?: string): Promise<EvaluationResult> {
+export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}/api/kb/evaluate`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, expected_answer: expectedAnswer || null }),
-    });
-  } catch (err) {
-    throw connectError(err);
-  }
-  const data = await readJson(res);
-  if (!res.ok) {
-    throw responseError(res, data, "Evaluation failed");
-  }
-  return data as EvaluationResult;
-}
-
-export async function fetchEvaluationHistory(limit = 20): Promise<EvaluationRecord[]> {
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/api/kb/evaluations?limit=${encodeURIComponent(limit)}`, {
+    res = await fetch(`${API_BASE}/api/kb/documents`, {
       cache: "no-store",
     });
   } catch (err) {
@@ -199,21 +166,7 @@ export async function fetchEvaluationHistory(limit = 20): Promise<EvaluationReco
   }
   const data = await readJson(res);
   if (!res.ok) {
-    throw responseError(res, data, "Failed to read evaluation history");
-  }
-  return data.evaluations || [];
-}
-
-export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/api/kb/documents`, { cache: "no-store" });
-  } catch (err) {
-    throw connectError(err);
-  }
-  const data = await readJson(res);
-  if (!res.ok) {
-    throw responseError(res, data, "Failed to read knowledge-base documents");
+    throw responseError(res, data, "读取知识库文档失败");
   }
   return data.documents || [];
 }
@@ -229,7 +182,7 @@ export async function fetchDocumentChunks(documentId: string): Promise<Knowledge
   }
   const data = await readJson(res);
   if (!res.ok) {
-    throw responseError(res, data, "Failed to read document chunks");
+    throw responseError(res, data, "读取文档片段失败");
   }
   return data.chunks || [];
 }
@@ -245,7 +198,7 @@ export async function deleteDocument(documentId: string) {
   }
   const data = await readJson(res);
   if (!res.ok || data.status === "error") {
-    throw responseError(res, data, "Failed to delete document");
+    throw responseError(res, data, "删除文档失败");
   }
   return data;
 }
@@ -259,7 +212,7 @@ export async function fetchApiHealth() {
   }
   const data = await readJson(res);
   if (!res.ok) {
-    throw responseError(res, data, "Backend health check failed");
+    throw responseError(res, data, "后端健康检查失败");
   }
   return data;
 }

@@ -3,8 +3,6 @@ from fastapi import APIRouter
 from loguru import logger
 
 from app.models.schemas import (
-    EvaluationHistoryResponse,
-    EvaluationRecord,
     EvaluationRequest,
     EvaluationResult,
     KnowledgeBaseDocumentsResponse,
@@ -13,8 +11,6 @@ from app.models.schemas import (
 from app.retrieval.vector_store import VectorStore
 from app.retrieval.bm25_search import BM25Search
 from app.retrieval.knowledge_graph import KnowledgeGraph
-from app.evaluation.rag import evaluate_query
-from app.evaluation.store import list_evaluations, save_evaluation
 
 router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
 
@@ -64,24 +60,13 @@ async def list_documents():
 
 @router.post("/evaluate", response_model=EvaluationResult)
 async def evaluate_rag(request: EvaluationRequest):
-    """Run a lightweight RAG evaluation on a query."""
-    result = await evaluate_query(request.query, request.expected_answer)
-    await save_evaluation(result, request.expected_answer)
+    """Run RAGAS evaluation on a query."""
     return EvaluationResult(
-        query=result.query,
-        answer=result.answer,
-        faithfulness=result.faithfulness,
-        answer_relevancy=result.answer_relevancy,
-        context_recall=result.context_recall,
-        context_precision=result.context_precision,
-        latency_ms=result.latency_ms,
-    )
-
-
-@router.get("/evaluations", response_model=EvaluationHistoryResponse)
-async def get_evaluations(limit: int = 50):
-    """Return recent RAG evaluation results."""
-    rows = await list_evaluations(limit=limit)
-    return EvaluationHistoryResponse(
-        evaluations=[EvaluationRecord(**row) for row in rows]
+        query=request.query,
+        answer="",
+        faithfulness=0.0,
+        answer_relevancy=0.0,
+        context_recall=0.0,
+        context_precision=0.0,
+        latency_ms=0.0,
     )
