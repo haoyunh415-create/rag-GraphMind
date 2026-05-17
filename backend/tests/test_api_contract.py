@@ -140,6 +140,28 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(chunks_after_delete.status_code, 200)
         self.assertEqual(chunks_after_delete.json()["chunks"], [])
 
+    def test_kb_stats_reports_real_local_storage_size(self) -> None:
+        self.use_isolated_sqlite()
+
+        upload = self.client.post(
+            "/api/documents/upload",
+            files={
+                "file": (
+                    "stats.txt",
+                    b"Stats verification document. Storage size should reflect the local SQLite database.",
+                    "text/plain",
+                )
+            },
+        )
+        self.assertEqual(upload.status_code, 200)
+
+        stats = self.client.get("/api/kb/stats")
+        self.assertEqual(stats.status_code, 200)
+        data = stats.json()
+        self.assertGreaterEqual(data["total_documents"], 1)
+        self.assertGreaterEqual(data["total_chunks"], 1)
+        self.assertGreater(data["storage_size_bytes"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
