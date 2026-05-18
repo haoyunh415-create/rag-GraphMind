@@ -1,14 +1,20 @@
 [CmdletBinding()]
 param(
+    [string]$EnvPath = ".env",
     [switch]$SkipFrontendBuild,
     [switch]$SkipBackendTests,
-    [switch]$SkipComposeConfig
+    [switch]$SkipComposeConfig,
+    [switch]$SkipEnvCheck
 )
 
 $ErrorActionPreference = "Stop"
 
 $Root = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..")).Path
-$EnvPath = Join-Path $Root ".env"
+$EnvFullPath = if ([System.IO.Path]::IsPathRooted($EnvPath)) {
+    $EnvPath
+} else {
+    Join-Path $Root $EnvPath
+}
 $FrontendDir = Join-Path $Root "frontend"
 $BackendDir = Join-Path $Root "backend"
 $BackendPython = Join-Path $BackendDir "venv\Scripts\python.exe"
@@ -25,12 +31,17 @@ function Assert-Command {
     }
 }
 
-Write-Step "Checking environment file"
-if (-not (Test-Path -LiteralPath $EnvPath)) {
-    throw "Missing .env. Copy .env.production.example to .env and replace every replace-me value."
+if (-not $SkipEnvCheck) {
+    Write-Step "Running production environment check"
+    & (Join-Path $PSScriptRoot "env-check.ps1") -EnvPath $EnvFullPath -RequireEnv -Production
 }
 
-$envContent = Get-Content -LiteralPath $EnvPath -Raw
+Write-Step "Checking environment file"
+if (-not (Test-Path -LiteralPath $EnvFullPath)) {
+    throw "Missing .env. Copy .env.example to .env and replace every replace-me value."
+}
+
+$envContent = Get-Content -LiteralPath $EnvFullPath -Raw
 if ($envContent -match "replace-me") {
     throw ".env still contains replace-me placeholders."
 }

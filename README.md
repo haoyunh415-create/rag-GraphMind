@@ -73,12 +73,55 @@ If PowerShell blocks local scripts, run them with:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-dev.ps1
 ```
 
+## Environment Configuration
+
+Local development can run without a `.env` file because the backend has safe
+defaults for local ports and the SQLite fallback store. For Docker or
+production-like runs, create a real `.env` from the checked-in template:
+
+```powershell
+Copy-Item .env.example .env
+notepad .env
+```
+
+Replace every `replace-me` value before deployment. The most important settings
+are:
+
+- `OPENAI_API_KEY`, `OPENAI_MODEL`, `EMBEDDING_MODEL`, and `LLM_BASE_URL` for
+  answer generation and embeddings.
+- `NEXT_PUBLIC_API_URL` for the browser-visible backend URL.
+- `CORS_ORIGINS` for the frontend origins allowed to call the backend.
+- `NEO4J_PASSWORD`, `MINIO_ACCESS_KEY`, and `MINIO_SECRET_KEY` for the optional
+  Docker services.
+- `MAX_UPLOAD_BYTES`, `CHUNK_SIZE`, `CHUNK_OVERLAP`, `TOP_K`, and
+  `RERANK_TOP_K` for ingestion and retrieval behavior.
+
+Run a local environment check from the repository root:
+
+```powershell
+.\scripts\env-check.ps1
+```
+
+For a stricter production-style check that requires `.env` and rejects
+placeholders:
+
+```powershell
+.\scripts\env-check.ps1 -RequireEnv -Production
+```
+
+If the dev services are already running, also verify backend health, the
+frontend page, and the compiled CSS asset:
+
+```powershell
+.\scripts\env-check.ps1 -CheckServices
+```
+
 ## Production Checklist
 
 Before deploying publicly:
 
 - Rotate any leaked or locally used API keys.
-- Copy `.env.production.example` to `.env` and replace every `replace-me` value.
+- Copy `.env.example` to `.env` and replace every `replace-me` value.
 - Set `DEBUG=false`.
 - Set `NEXT_PUBLIC_API_URL` to the public backend URL.
 - Set `CORS_ORIGINS` to the public frontend origin only.
@@ -97,7 +140,7 @@ The default compose file is production-leaning: it builds images without mountin
 For a production host:
 
 ```powershell
-Copy-Item .env.production.example .env
+Copy-Item .env.example .env
 notepad .env
 .\scripts\deploy-check.ps1
 docker compose up --build -d
