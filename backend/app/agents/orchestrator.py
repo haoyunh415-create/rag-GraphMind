@@ -12,6 +12,8 @@ from app.retrieval.health import retrieval_health
 from app.core.config import get_settings
 from app.core.observability import RetrievalTrace
 from app.core import conversation
+from app.evaluation.rag_quality import evaluate_rag_answer
+from app.evaluation.store import EvaluationStore
 
 
 class AgentOrchestrator:
@@ -72,6 +74,8 @@ class AgentOrchestrator:
                 ))
 
             trace.add_step("chat", {"tokens": len(buffer)})
+            evaluation = await self._evaluate_turn(trace, query, "".join(buffer), [])
+            yield {"type": "evaluation", "data": evaluation.model_dump()}
             yield {"type": "trace", "data": trace.to_dict()}
             return
 
@@ -88,6 +92,8 @@ class AgentOrchestrator:
                 yield {"type": "citations", "data": []}
                 yield {"type": "chunk", "data": message}
                 trace.add_step("blocked_empty_kb", {"reason": "empty_knowledge_base", "tokens": 1})
+                evaluation = await self._evaluate_turn(trace, query, message, [])
+                yield {"type": "evaluation", "data": evaluation.model_dump()}
                 yield {"type": "trace", "data": trace.to_dict()}
                 return
 
@@ -105,6 +111,8 @@ class AgentOrchestrator:
                 ))
 
             trace.add_step("chat_empty_kb", {"tokens": len(buffer)})
+            evaluation = await self._evaluate_turn(trace, query, "".join(buffer), [])
+            yield {"type": "evaluation", "data": evaluation.model_dump()}
             yield {"type": "trace", "data": trace.to_dict()}
             return
 
@@ -213,6 +221,8 @@ class AgentOrchestrator:
                     asyncio.create_task(conversation.append_history(
                         self.conversation_id, query, "".join(answer_buffer)
                     ))
+                evaluation = await self._evaluate_turn(trace, query, "".join(answer_buffer), [])
+                yield {"type": "evaluation", "data": evaluation.model_dump()}
                 yield {"type": "trace", "data": trace.to_dict()}
                 return
 
@@ -223,6 +233,9 @@ class AgentOrchestrator:
                 yield {"type": "chunk", "data": token}
 
         trace.add_step("generate", {"tokens": token_count})
+
+        evaluation = await self._evaluate_turn(trace, query, "".join(answer_buffer), citations)
+        yield {"type": "evaluation", "data": evaluation.model_dump()}
 
         # --- Save conversation turn ---
         if self.conversation_id:
@@ -238,6 +251,38 @@ class AgentOrchestrator:
             f"ranked={len(ranked)} tokens={token_count}"
         )
         yield {"type": "trace", "data": trace_dict}
+
+    async def _evaluate_turn(
+        self,
+        trace: RetrievalTrace,
+        query: str,
+        answer: str,
+        contexts: list[dict],
+    ):
+        trace_snapshot = trace.to_dict()
+        evaluation = evaluate_rag_answer(
+            query=query,
+            answer=answer,
+            contexts=contexts,
+            latency_ms=trace_snapshot["total_ms"],
+            query_id=self.query_id,
+            conversation_id=self.conversation_id,
+        )
+        evaluation = await EvaluationStore().save(
+            evaluation,
+            contexts=contexts,
+            trace=trace_snapshot,
+        )
+        trace.add_step("evaluate", {
+            "overall_score": evaluation.overall_score,
+            "label": evaluation.label,
+            "groundedness": evaluation.groundedness,
+            "answer_relevance": evaluation.answer_relevance,
+            "citation_coverage": evaluation.citation_coverage,
+            "retrieval_quality": evaluation.retrieval_quality,
+            "issues": evaluation.issues,
+        })
+        return evaluation
 
 
 def _summarize_results(results: list[dict], limit: int = 5) -> list[dict]:

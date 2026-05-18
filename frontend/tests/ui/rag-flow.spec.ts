@@ -76,10 +76,35 @@ test("user can upload, ask a grounded question, see citations, and inspect trace
     await expect(page.getByTestId("message-citations")).toBeVisible();
     await expect(page.getByTestId("message-citations").getByText(fileName)).toBeVisible();
 
+    await expect
+      .poll(
+        async () => {
+          const response = await request.get(`${apiBase}/api/kb/evaluations?limit=10`);
+          if (!response.ok()) return null;
+          const payload = await response.json();
+          const evaluation = payload.evaluations.find((item: any) =>
+            String(item.query).includes("beta interface"),
+          );
+          return evaluation?.overall_score ?? null;
+        },
+        { timeout: 30_000 },
+      )
+      .not.toBeNull();
+
     await page.getByTestId("tab-trace").click();
     await expect(page.getByTestId("panel-trace")).toBeVisible();
     await expect(page.getByTestId("trace-card")).toBeVisible();
     await expect(page.getByTestId("trace-card")).toContainText("beta interface");
+    await expect(page.getByTestId("trace-card")).toContainText("Quality");
+    await expect(page.getByTestId("trace-quality-card")).toBeVisible();
+    await expect(page.getByTestId("trace-quality-overall")).toContainText(/%/);
+    await expect(page.getByTestId("trace-quality-metric")).toHaveCount(4);
+
+    await page.getByTestId("tab-knowledge").click();
+    await expect(page.getByTestId("knowledge-quality-summary")).toBeVisible();
+    await page.getByTestId("knowledge-refresh").click();
+    await expect(page.getByTestId("knowledge-quality-average")).toContainText(/%/);
+    await expect(page.getByTestId("knowledge-quality-row").filter({ hasText: "beta interface" })).toBeVisible();
   } finally {
     if (documentId) {
       await request.delete(`${apiBase}/api/documents/${documentId}`);

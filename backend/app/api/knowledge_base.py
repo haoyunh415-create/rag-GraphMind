@@ -1,10 +1,15 @@
 import asyncio
+import time
 from pathlib import Path
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 from loguru import logger
 
+from app.agents.tools import synthesize_answer
 from app.core.config import get_settings
+from app.evaluation.rag_quality import evaluate_rag_answer
+from app.evaluation.store import EvaluationStore
 from app.models.schemas import (
+    EvaluationListResponse,
     EvaluationRequest,
     EvaluationResult,
     KnowledgeBaseDocumentsResponse,
@@ -108,11 +113,34 @@ async def list_documents():
 
 @router.post("/evaluate", response_model=EvaluationResult)
 async def evaluate_rag(request: EvaluationRequest):
-    """Evaluation is intentionally disabled until real scoring is wired in."""
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail=(
-            "RAG quality evaluation is not enabled in this stable build. "
-            "The chat, upload, citation, and trace flow remain available."
-        ),
+    """Evaluate a RAG answer against real retrieved/provided context."""
+    started_at = time.perf_counter()
+    contexts = [ctx.model_dump() for ctx in request.contexts]
+    answer = (request.answer or "").strip()
+
+    if not contexts:
+        contexts = await VectorStore().search(request.query, request.top_k)
+
+    if not answer:
+        if contexts:
+            answer_parts: list[str] = []
+            async for token in synthesize_answer(request.query, contexts, [request.query], []):
+                answer_parts.append(token)
+            answer = "".join(answer_parts).strip()
+        else:
+            answer = "No relevant documents were found in the knowledge base."
+
+    result = evaluate_rag_answer(
+        query=request.query,
+        answer=answer,
+        contexts=contexts,
+        expected_answer=request.expected_answer,
+        latency_ms=(time.perf_counter() - started_at) * 1000,
     )
+    return await EvaluationStore().save(result, contexts=contexts)
+
+
+@router.get("/evaluations", response_model=EvaluationListResponse)
+async def list_evaluations(limit: int = 20):
+    evaluations = await EvaluationStore().list_recent(limit=limit)
+    return EvaluationListResponse(evaluations=evaluations)

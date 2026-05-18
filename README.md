@@ -25,9 +25,10 @@ Supported upload extensions are `.pdf`, `.docx`, `.txt`, `.md`, `.markdown`,
 `.html`, `.htm`, and `.csv`. The default upload limit is 10 MB and can be
 changed with `MAX_UPLOAD_BYTES`.
 
-The `/api/kb/evaluate` endpoint is intentionally disabled in this stable build.
-It returns HTTP 501 until real RAG quality scoring is wired into the chat flow.
-This avoids showing placeholder quality scores as if they were real evaluation results.
+Each answered turn now runs a deterministic RAG quality evaluation and stores the
+result in SQLite. The score covers groundedness, answer relevance, citation
+coverage, and retrieval quality. Use `POST /api/kb/evaluate` for direct scoring
+or `GET /api/kb/evaluations` to inspect recent saved results.
 
 ## Verification
 

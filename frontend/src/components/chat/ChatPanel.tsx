@@ -17,7 +17,7 @@ import {
 } from "lucide-react";
 import { ChatMessage, type Message } from "./ChatMessage";
 import type { Trace } from "@/components/observability/TracePanel";
-import { streamChat, uploadDocument } from "@/lib/api";
+import { streamChat, type EvaluationResult, uploadDocument } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 let nextId = 0;
@@ -37,6 +37,7 @@ interface ConversationRecord {
 
 interface Props {
   onTrace?: (trace: Trace) => void;
+  onEvaluation?: (evaluation: EvaluationResult) => void;
 }
 
 type StreamStepKey = "queued" | "routing" | "decomposing" | "retrieving" | "ranking" | "generating";
@@ -205,7 +206,7 @@ function formatHistoryTime(timestamp: number) {
   });
 }
 
-export function ChatPanel({ onTrace }: Props) {
+export function ChatPanel({ onTrace, onEvaluation }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [chatMode, setChatMode] = useState<ChatMode>("auto");
@@ -461,6 +462,10 @@ export function ChatPanel({ onTrace }: Props) {
         if (data?.backends) {
           setBackendStatuses(data.backends);
         }
+      },
+      (evaluation: EvaluationResult) => {
+        onEvaluation?.(evaluation);
+        setStatusText(`quality: ${(evaluation.overall_score * 100).toFixed(0)}% ${evaluation.label}`);
       },
       (trace: Trace) => {
         onTrace?.(trace);

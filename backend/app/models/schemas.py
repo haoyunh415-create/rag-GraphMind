@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from enum import Enum
 
 
@@ -90,16 +90,48 @@ class DocumentChunksResponse(BaseModel):
     chunks: list[DocumentChunk] = Field(default_factory=list)
 
 
+class EvaluationContext(BaseModel):
+    source: str = "vector"
+    document_id: str = ""
+    document_name: str = ""
+    chunk_id: Optional[str] = None
+    chunk_index: Optional[int] = None
+    text: str
+    score: float = 0.0
+    page: Optional[int] = None
+
+
 class EvaluationRequest(BaseModel):
-    query: str
+    query: str = Field(min_length=1, max_length=4000)
+    answer: Optional[str] = None
+    contexts: list[EvaluationContext] = Field(default_factory=list)
     expected_answer: Optional[str] = None
+    top_k: int = Field(default=10, ge=1, le=20)
 
 
 class EvaluationResult(BaseModel):
+    evaluation_id: Optional[str] = None
+    query_id: Optional[str] = None
+    conversation_id: Optional[str] = None
     query: str
     answer: str
+    overall_score: float = 0.0
+    label: Literal["pass", "warn", "fail"] = "fail"
+    groundedness: float = 0.0
+    answer_relevance: float = 0.0
+    citation_coverage: float = 0.0
+    retrieval_quality: float = 0.0
     faithfulness: float
     answer_relevancy: float
     context_recall: float
     context_precision: float
     latency_ms: float
+    context_count: int = 0
+    citation_count: int = 0
+    issues: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+    created_at: Optional[str] = None
+
+
+class EvaluationListResponse(BaseModel):
+    evaluations: list[EvaluationResult] = Field(default_factory=list)

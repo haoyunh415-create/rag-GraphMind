@@ -14,8 +14,10 @@ import {
 } from "lucide-react";
 import {
   deleteDocument,
+  fetchEvaluations,
   fetchDocumentChunks,
   fetchKnowledgeDocuments,
+  type EvaluationResult,
   type KnowledgeChunk,
   type KnowledgeDocument,
   uploadDocument,
@@ -50,12 +52,19 @@ interface UploadItem {
   message?: string;
 }
 
-export function UploadPanel() {
+interface Props {
+  qualityRefreshKey?: number;
+}
+
+export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
   const [files, setFiles] = useState<UploadItem[]>([]);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
+  const [evaluations, setEvaluations] = useState<EvaluationResult[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
+  const [loadingQuality, setLoadingQuality] = useState(true);
   const [documentError, setDocumentError] = useState<string | null>(null);
+  const [qualityError, setQualityError] = useState<string | null>(null);
   const [expandedDocumentId, setExpandedDocumentId] = useState<string | null>(null);
   const [chunksByDocument, setChunksByDocument] = useState<Record<string, KnowledgeChunk[]>>({});
   const [chunkLoadingId, setChunkLoadingId] = useState<string | null>(null);
@@ -75,9 +84,25 @@ export function UploadPanel() {
     }
   }, []);
 
+  const refreshQuality = useCallback(async () => {
+    setLoadingQuality(true);
+    setQualityError(null);
+    try {
+      setEvaluations(await fetchEvaluations(20));
+    } catch (error) {
+      setQualityError(error instanceof Error ? error.message : "quality evaluation load failed");
+    } finally {
+      setLoadingQuality(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshDocuments();
   }, [refreshDocuments]);
+
+  useEffect(() => {
+    void refreshQuality();
+  }, [refreshQuality, qualityRefreshKey]);
 
   const uploadFile = async (file: File) => {
     const ext = `.${file.name.split(".").pop()?.toLowerCase() || ""}`;
@@ -108,6 +133,7 @@ export function UploadPanel() {
         ),
       );
       await refreshDocuments();
+      await refreshQuality();
     } catch (error) {
       setFiles((prev) =>
         prev.map((f) =>
@@ -160,6 +186,7 @@ export function UploadPanel() {
       });
       if (expandedDocumentId === doc.document_id) setExpandedDocumentId(null);
       await refreshDocuments();
+      await refreshQuality();
     } catch (error) {
       setDocumentError(error instanceof Error ? error.message : "删除失败");
     } finally {
@@ -187,6 +214,12 @@ export function UploadPanel() {
   const doneCount = files.filter((f) => f.status === "done").length;
   const errorCount = files.filter((f) => f.status === "error").length;
   const totalChunks = documents.reduce((sum, doc) => sum + doc.chunk_count, 0);
+  const averageQuality =
+    evaluations.length > 0
+      ? evaluations.reduce((sum, item) => sum + item.overall_score, 0) / evaluations.length
+      : null;
+  const lowQualityCount = evaluations.filter((item) => item.label === "fail").length;
+  const warningQualityCount = evaluations.filter((item) => item.label === "warn").length;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5 p-5">
@@ -195,6 +228,16 @@ export function UploadPanel() {
         <Metric label="片段总数" value={totalChunks} />
         <Metric label="上传记录" value={files.length} />
       </section>
+
+      <QualityOverview
+        evaluations={evaluations}
+        averageQuality={averageQuality}
+        lowQualityCount={lowQualityCount}
+        warningQualityCount={warningQualityCount}
+        loading={loadingQuality}
+        error={qualityError}
+        onRefresh={() => void refreshQuality()}
+      />
 
       <section className="rounded-lg border border-border/70 bg-card/55 p-4">
         <div className="mb-4 flex items-center justify-between gap-3">
@@ -284,12 +327,15 @@ export function UploadPanel() {
           <button
             type="button"
             data-testid="knowledge-refresh"
-            onClick={() => void refreshDocuments()}
+            onClick={() => {
+              void refreshDocuments();
+              void refreshQuality();
+            }}
             className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
             aria-label="刷新文档列表"
-            disabled={loadingDocuments}
+            disabled={loadingDocuments || loadingQuality}
           >
-            <RefreshCw className={cn("h-4 w-4", loadingDocuments && "animate-spin")} />
+            <RefreshCw className={cn("h-4 w-4", (loadingDocuments || loadingQuality) && "animate-spin")} />
           </button>
         </div>
 
@@ -496,6 +542,168 @@ function UploadRow({ item }: { item: UploadItem }) {
       )}
     </div>
   );
+}
+
+function QualityOverview({
+  evaluations,
+  averageQuality,
+  lowQualityCount,
+  warningQualityCount,
+  loading,
+  error,
+  onRefresh,
+}: {
+  evaluations: EvaluationResult[];
+  averageQuality: number | null;
+  lowQualityCount: number;
+  warningQualityCount: number;
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  const passCount = evaluations.filter((item) => item.label === "pass").length;
+  const recent = evaluations.slice(0, 4);
+  const issueCounts = evaluations.reduce<Record<string, number>>((acc, item) => {
+    for (const issue of item.issues || []) {
+      acc[issue] = (acc[issue] || 0) + 1;
+    }
+    return acc;
+  }, {});
+  const commonIssues = Object.entries(issueCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3);
+
+  return (
+    <section
+      className="rounded-lg border border-border/70 bg-card/55 p-4"
+      data-testid="knowledge-quality-summary"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">Answer quality</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Recent RAG answers scored by groundedness, relevance, citations, and retrieval.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+          aria-label="Refresh answer quality"
+          disabled={loading}
+        >
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <QualityMetric
+          label="Avg Quality"
+          value={averageQuality == null ? "--" : formatPercent(averageQuality)}
+          testId="knowledge-quality-average"
+        />
+        <QualityMetric label="Pass" value={passCount.toString()} />
+        <QualityMetric label="Warn" value={warningQualityCount.toString()} />
+        <QualityMetric label="Fail" value={lowQualityCount.toString()} tone={lowQualityCount > 0 ? "bad" : "ok"} />
+      </div>
+
+      {error && (
+        <div className="mt-3 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      {!error && loading && evaluations.length === 0 && (
+        <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading quality scores
+        </div>
+      )}
+
+      {!error && !loading && evaluations.length === 0 && (
+        <div className="mt-3 rounded-md border border-dashed border-border/70 px-3 py-3 text-xs text-muted-foreground">
+          No scored answers yet.
+        </div>
+      )}
+
+      {commonIssues.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5">
+          {commonIssues.map(([issue, count]) => (
+            <span
+              key={issue}
+              className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-300"
+            >
+              {issue.replace(/_/g, " ")} x{count}
+            </span>
+          ))}
+        </div>
+      )}
+
+      {recent.length > 0 && (
+        <div className="mt-3 divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70">
+          {recent.map((item) => (
+            <div
+              key={item.evaluation_id || `${item.query}-${item.created_at}`}
+              className="grid gap-2 bg-background/45 px-3 py-2 text-xs sm:grid-cols-[minmax(0,1fr)_auto]"
+              data-testid="knowledge-quality-row"
+            >
+              <div className="min-w-0">
+                <div className="truncate font-medium text-foreground">{item.query}</div>
+                <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
+                  <span>grounded {formatPercent(item.groundedness)}</span>
+                  <span>citations {formatPercent(item.citation_coverage)}</span>
+                  <span>retrieval {formatPercent(item.retrieval_quality)}</span>
+                </div>
+              </div>
+              <span
+                className={cn(
+                  "inline-flex h-7 items-center justify-center rounded-md border px-2 font-mono text-[11px]",
+                  item.label === "pass" && "border-success/30 bg-success/10 text-success",
+                  item.label === "warn" && "border-amber-400/30 bg-amber-400/10 text-amber-300",
+                  item.label === "fail" && "border-destructive/30 bg-destructive/10 text-destructive",
+                )}
+              >
+                {formatPercent(item.overall_score)}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function QualityMetric({
+  label,
+  value,
+  tone = "neutral",
+  testId,
+}: {
+  label: string;
+  value: string;
+  tone?: "neutral" | "ok" | "bad";
+  testId?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border/70 bg-background/45 px-3 py-2">
+      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
+      <div
+        className={cn(
+          "mt-1 font-mono text-lg font-semibold",
+          tone === "ok" && "text-success",
+          tone === "bad" && "text-destructive",
+          tone === "neutral" && "text-foreground",
+        )}
+        data-testid={testId}
+      >
+        {value}
+      </div>
+    </div>
+  );
+}
+
+function formatPercent(value: number) {
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
 function Metric({ label, value }: { label: string; value: number }) {

@@ -6,7 +6,7 @@ import { TracePanel, type Trace } from "@/components/observability/TracePanel";
 import { Database, MessageSquare, Activity, Layers, AlertCircle, CheckCircle2, Loader2 } from "lucide-react";
 import { useState, useCallback, useEffect } from "react";
 import { cn } from "@/lib/utils";
-import { API_BASE, fetchApiHealth } from "@/lib/api";
+import { API_BASE, fetchApiHealth, type EvaluationResult } from "@/lib/api";
 
 type Tab = "chat" | "knowledge" | "trace";
 
@@ -17,11 +17,16 @@ export default function Home() {
   const [latestQueryId, setLatestQueryId] = useState<string | null>(null);
   const [apiStatus, setApiStatus] = useState<"checking" | "ok" | "error">("checking");
   const [apiError, setApiError] = useState<string>("");
+  const [qualityRefreshKey, setQualityRefreshKey] = useState(0);
 
   const handleNewTrace = useCallback((trace: Trace) => {
     setTraces((prev) => [trace, ...prev].slice(0, 50));
     setTraceCount((n) => n + 1);
     setLatestQueryId(trace.query_id);
+  }, []);
+
+  const handleNewEvaluation = useCallback((_evaluation: EvaluationResult) => {
+    setQualityRefreshKey((key) => key + 1);
   }, []);
 
   const refreshApiHealth = useCallback(async () => {
@@ -149,7 +154,7 @@ export default function Home() {
           role="tabpanel"
           aria-label="对话"
         >
-          <ChatPanel onTrace={handleNewTrace} />
+          <ChatPanel onTrace={handleNewTrace} onEvaluation={handleNewEvaluation} />
         </div>
         <div
           className={cn("flex-1 overflow-y-auto", activeTab !== "knowledge" && "hidden")}
@@ -157,7 +162,7 @@ export default function Home() {
           role="tabpanel"
           aria-label="知识库"
         >
-          <UploadPanel />
+          <UploadPanel qualityRefreshKey={qualityRefreshKey} />
         </div>
         <div
           className={cn("flex-1 overflow-y-auto", activeTab !== "trace" && "hidden")}

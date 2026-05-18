@@ -53,6 +53,13 @@ export interface TraceStep {
   backends?: Record<string, { available: boolean; detail: string }>;
   details?: RetrievalDetail[];
   results?: TraceResult[];
+  overall_score?: number;
+  label?: "pass" | "warn" | "fail";
+  groundedness?: number;
+  answer_relevance?: number;
+  citation_coverage?: number;
+  retrieval_quality?: number;
+  issues?: string[];
 }
 
 export interface Trace {
@@ -72,6 +79,7 @@ const STEP_CONFIG: Record<
   string,
   { icon: ElementType; color: string; bg: string; label: string }
 > = {
+  evaluate: { icon: Gauge, color: "text-lime-400", bg: "bg-lime-500/25", label: "Quality" },
   intent: { icon: CircleDot, color: "text-sky-400", bg: "bg-sky-500/25", label: "意图" },
   backend_health: { icon: Server, color: "text-cyan-400", bg: "bg-cyan-500/25", label: "后端" },
   decompose: { icon: Search, color: "text-blue-400", bg: "bg-blue-500/25", label: "分解" },
@@ -97,6 +105,17 @@ function sourceLabel(source: string) {
   return labels[source] || source;
 }
 
+function formatPercent(value: number | undefined) {
+  if (value == null || Number.isNaN(value)) return "--";
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+}
+
+function qualityTone(label?: "pass" | "warn" | "fail") {
+  if (label === "pass") return "border-success/30 bg-success/10 text-success";
+  if (label === "warn") return "border-amber-400/30 bg-amber-400/10 text-amber-300";
+  return "border-destructive/30 bg-destructive/10 text-destructive";
+}
+
 function TraceCard({ trace, isLatest }: { trace: Trace; isLatest: boolean }) {
   const [expanded, setExpanded] = useState(isLatest);
 
@@ -108,6 +127,7 @@ function TraceCard({ trace, isLatest }: { trace: Trace; isLatest: boolean }) {
   const hasErrors = totalErrors > 0;
   const maxMs = Math.max(...trace.steps.map((s) => s.elapsed_ms), 1);
   const totalTokens = trace.steps.reduce((n, s) => n + (s.tokens || 0), 0);
+  const qualityStep = trace.steps.find((step) => step.name === "evaluate");
 
   return (
     <div
@@ -142,6 +162,8 @@ function TraceCard({ trace, isLatest }: { trace: Trace; isLatest: boolean }) {
 
       {expanded && (
         <div className="border-t border-border/50 px-4 pb-4">
+          {qualityStep && <TraceQualitySummary step={qualityStep} />}
+
           {trace.sub_queries.length > 0 && (
             <div className="mb-3 mt-3">
               <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
@@ -186,6 +208,66 @@ function TraceCard({ trace, isLatest }: { trace: Trace; isLatest: boolean }) {
               <span>{formatMs(trace.total_ms)} 总计</span>
             </div>
           </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TraceQualitySummary({ step }: { step: TraceStep }) {
+  const metrics = [
+    ["Grounded", step.groundedness],
+    ["Relevant", step.answer_relevance],
+    ["Citations", step.citation_coverage],
+    ["Retrieval", step.retrieval_quality],
+  ] as const;
+
+  return (
+    <div
+      className="mt-3 rounded-lg border border-border/60 bg-background/45 p-3"
+      data-testid="trace-quality-card"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            Answer quality
+          </div>
+          <div className="mt-1 flex items-center gap-2">
+            <span
+              className={cn(
+                "inline-flex items-center rounded-md border px-2 py-1 font-mono text-sm font-semibold",
+                qualityTone(step.label),
+              )}
+              data-testid="trace-quality-overall"
+            >
+              {formatPercent(step.overall_score)}
+            </span>
+            <span className="text-xs text-muted-foreground">{step.label || "fail"}</span>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+          {metrics.map(([label, value]) => (
+            <div
+              key={label}
+              className="rounded-md border border-border/60 bg-card/40 px-2 py-1.5"
+              data-testid="trace-quality-metric"
+            >
+              <div className="text-[10px] text-muted-foreground">{label}</div>
+              <div className="font-mono text-xs font-semibold text-foreground">{formatPercent(value)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+      {step.issues && step.issues.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {step.issues.map((issue) => (
+            <span
+              key={issue}
+              className="rounded-md border border-amber-400/30 bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-300"
+            >
+              {issue.replace(/_/g, " ")}
+            </span>
+          ))}
         </div>
       )}
     </div>

@@ -42,6 +42,7 @@ export async function streamChat(
   onChunk: (text: string) => void,
   onCitation: (citations: any[]) => void,
   onStatus: (status: string, detail: string, data?: any) => void,
+  onEvaluation: (evaluation: EvaluationResult) => void,
   onTrace: (trace: any) => void,
   onDone: () => void,
   onError: (err: Error) => void,
@@ -107,6 +108,9 @@ export async function streamChat(
           case "status":
             onStatus(data.data?.status || "", data.data?.detail || "", data.data);
             break;
+          case "evaluation":
+            onEvaluation(data.data);
+            break;
           case "trace":
             onTrace(data.data);
             break;
@@ -155,6 +159,30 @@ export interface KnowledgeChunk {
   text: string;
 }
 
+export interface EvaluationResult {
+  evaluation_id?: string;
+  query_id?: string;
+  conversation_id?: string;
+  query: string;
+  answer: string;
+  overall_score: number;
+  label: "pass" | "warn" | "fail";
+  groundedness: number;
+  answer_relevance: number;
+  citation_coverage: number;
+  retrieval_quality: number;
+  faithfulness: number;
+  answer_relevancy: number;
+  context_recall: number;
+  context_precision: number;
+  latency_ms: number;
+  context_count: number;
+  citation_count: number;
+  issues: string[];
+  details: Record<string, unknown>;
+  created_at?: string;
+}
+
 export async function fetchKnowledgeDocuments(): Promise<KnowledgeDocument[]> {
   let res: Response;
   try {
@@ -185,6 +213,22 @@ export async function fetchDocumentChunks(documentId: string): Promise<Knowledge
     throw responseError(res, data, "读取文档片段失败");
   }
   return data.chunks || [];
+}
+
+export async function fetchEvaluations(limit = 20): Promise<EvaluationResult[]> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/kb/evaluations?limit=${limit}`, {
+      cache: "no-store",
+    });
+  } catch (err) {
+    throw connectError(err);
+  }
+  const data = await readJson(res);
+  if (!res.ok) {
+    throw responseError(res, data, "è¯»å–è´¨é‡è¯„ä¼°å¤±è´¥");
+  }
+  return data.evaluations || [];
 }
 
 export async function deleteDocument(documentId: string) {

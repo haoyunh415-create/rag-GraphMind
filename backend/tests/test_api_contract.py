@@ -1,6 +1,7 @@
 import unittest
 import os
 import tempfile
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -63,14 +64,40 @@ class ApiContractTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 422)
 
-    def test_evaluation_endpoint_is_explicitly_disabled(self) -> None:
+    def test_evaluation_endpoint_scores_and_persists_grounded_answer(self) -> None:
+        self.use_isolated_sqlite()
+
         response = self.client.post(
             "/api/kb/evaluate",
-            json={"query": "What is in the knowledge base?"},
+            json={
+                "query": "What does the stable demo flow do?",
+                "answer": "The stable demo flow uploads, indexes, cites, and traces documents.",
+                "contexts": [
+                    {
+                        "source": "vector",
+                        "document_id": "doc-1",
+                        "document_name": "demo.txt",
+                        "chunk_id": "chunk-1",
+                        "text": "The stable demo flow uploads, indexes, cites, and traces documents.",
+                        "score": 0.92,
+                    }
+                ],
+            },
         )
 
-        self.assertEqual(response.status_code, 501)
-        self.assertIn("not enabled", response.json()["detail"])
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual(data["query"], "What does the stable demo flow do?")
+        self.assertGreaterEqual(data["overall_score"], 0.6)
+        self.assertGreaterEqual(data["groundedness"], 0.9)
+        self.assertEqual(data["citation_count"], 1)
+        self.assertIn(data["label"], {"pass", "warn"})
+
+        evaluations = self.client.get("/api/kb/evaluations")
+        self.assertEqual(evaluations.status_code, 200)
+        rows = evaluations.json()["evaluations"]
+        self.assertGreaterEqual(len(rows), 1)
+        self.assertEqual(rows[0]["evaluation_id"], data["evaluation_id"])
 
     def test_upload_rejects_unsupported_extension(self) -> None:
         response = self.client.post(
@@ -139,6 +166,42 @@ class ApiContractTests(unittest.TestCase):
         chunks_after_delete = self.client.get(f"/api/documents/{document_id}/chunks")
         self.assertEqual(chunks_after_delete.status_code, 200)
         self.assertEqual(chunks_after_delete.json()["chunks"], [])
+
+    def test_chat_stream_emits_quality_evaluation_and_trace_step(self) -> None:
+        self.use_isolated_sqlite()
+
+        upload = self.client.post(
+            "/api/documents/upload",
+            files={
+                "file": (
+                    "flow.txt",
+                    b"The stable demo flow uploads, indexes, cites, and traces documents.",
+                    "text/plain",
+                )
+            },
+        )
+        self.assertEqual(upload.status_code, 200)
+
+        async def fake_decompose_query(query: str) -> list[str]:
+            return [query]
+
+        async def fake_synthesize_answer(*args, **kwargs):
+            yield "The stable demo flow uploads, indexes, cites, and traces documents."
+
+        with (
+            patch("app.agents.orchestrator.decompose_query", fake_decompose_query),
+            patch("app.agents.orchestrator.synthesize_answer", fake_synthesize_answer),
+        ):
+            response = self.client.post(
+                "/api/chat/stream",
+                json={"query": "What does the stable demo flow do?", "mode": "kb", "top_k": 5},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.text
+        self.assertIn('"type": "evaluation"', body)
+        self.assertIn('"overall_score"', body)
+        self.assertIn('"name": "evaluate"', body)
 
     def test_kb_stats_reports_real_local_storage_size(self) -> None:
         self.use_isolated_sqlite()
