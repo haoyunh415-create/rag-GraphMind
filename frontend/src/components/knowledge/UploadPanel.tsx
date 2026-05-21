@@ -3,23 +3,36 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
+  Archive,
   CheckCircle,
   ChevronDown,
   Database,
   FileText,
+  FlaskConical,
   Loader2,
+  PauseCircle,
+  Power,
   RefreshCw,
   Trash2,
   Upload,
+  XCircle,
 } from "lucide-react";
 import {
+  cancelDocumentIngestion,
   deleteDocument,
+  fetchIngestionDeadLetterJobs,
+  fetchIngestionQueueHealth,
   fetchEvaluations,
   fetchDocumentChunks,
   fetchKnowledgeDocuments,
+  type DocumentLifecycleStatus,
   type EvaluationResult,
+  type IngestionDeadLetterJob,
+  type IngestionQueueHealth,
   type KnowledgeChunk,
   type KnowledgeDocument,
+  retryDocumentIngestion,
+  updateDocumentStatus,
   uploadDocument,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -60,16 +73,24 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
   const [files, setFiles] = useState<UploadItem[]>([]);
   const [documents, setDocuments] = useState<KnowledgeDocument[]>([]);
   const [evaluations, setEvaluations] = useState<EvaluationResult[]>([]);
+  const [queueHealth, setQueueHealth] = useState<IngestionQueueHealth | null>(null);
+  const [deadLetterJobs, setDeadLetterJobs] = useState<IngestionDeadLetterJob[]>([]);
   const [dragOver, setDragOver] = useState(false);
   const [loadingDocuments, setLoadingDocuments] = useState(true);
   const [loadingQuality, setLoadingQuality] = useState(true);
+  const [loadingQueueHealth, setLoadingQueueHealth] = useState(true);
   const [documentError, setDocumentError] = useState<string | null>(null);
   const [qualityError, setQualityError] = useState<string | null>(null);
+  const [queueError, setQueueError] = useState<string | null>(null);
   const [expandedDocumentId, setExpandedDocumentId] = useState<string | null>(null);
   const [chunksByDocument, setChunksByDocument] = useState<Record<string, KnowledgeChunk[]>>({});
   const [chunkLoadingId, setChunkLoadingId] = useState<string | null>(null);
   const [chunkError, setChunkError] = useState<string | null>(null);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const [cancellingDocumentId, setCancellingDocumentId] = useState<string | null>(null);
+  const [retryingDocumentId, setRetryingDocumentId] = useState<string | null>(null);
+  const [updatingStatusDocumentId, setUpdatingStatusDocumentId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<DocumentLifecycleStatus | "all">("all");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refreshDocuments = useCallback(async () => {
@@ -90,15 +111,49 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
     try {
       setEvaluations(await fetchEvaluations(20));
     } catch (error) {
-      setQualityError(error instanceof Error ? error.message : "quality evaluation load failed");
+      setQualityError(error instanceof Error ? error.message : "读取质量评估失败");
     } finally {
       setLoadingQuality(false);
+    }
+  }, []);
+
+  const refreshIngestionQueue = useCallback(async () => {
+    setLoadingQueueHealth(true);
+    setQueueError(null);
+    try {
+      const [health, deadLetters] = await Promise.all([
+        fetchIngestionQueueHealth(),
+        fetchIngestionDeadLetterJobs(5),
+      ]);
+      setQueueHealth(health);
+      setDeadLetterJobs(deadLetters);
+    } catch (error) {
+      setQueueError(error instanceof Error ? error.message : "读取入库队列失败");
+    } finally {
+      setLoadingQueueHealth(false);
     }
   }, []);
 
   useEffect(() => {
     void refreshDocuments();
   }, [refreshDocuments]);
+
+  useEffect(() => {
+    void refreshIngestionQueue();
+  }, [refreshIngestionQueue]);
+
+  useEffect(() => {
+    const hasActiveIngestion = documents.some((doc) =>
+      ["queued", "processing"].includes(doc.status),
+    );
+    if (!hasActiveIngestion) return;
+
+    const timer = window.setInterval(() => {
+      void refreshDocuments();
+      void refreshIngestionQueue();
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [documents, refreshDocuments, refreshIngestionQueue]);
 
   useEffect(() => {
     void refreshQuality();
@@ -127,13 +182,16 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
                 message:
                   result.status === "duplicate"
                     ? "已存在"
-                    : `${result.chunk_count || 0} 个片段`,
+                    : result.status === "queued"
+                      ? "已加入队列"
+                      : `${result.chunk_count || 0} 个片段`,
               }
             : f,
         ),
       );
       await refreshDocuments();
       await refreshQuality();
+      await refreshIngestionQueue();
     } catch (error) {
       setFiles((prev) =>
         prev.map((f) =>
@@ -186,11 +244,103 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
       });
       if (expandedDocumentId === doc.document_id) setExpandedDocumentId(null);
       await refreshDocuments();
+      await refreshIngestionQueue();
       await refreshQuality();
     } catch (error) {
       setDocumentError(error instanceof Error ? error.message : "删除失败");
     } finally {
       setDeletingDocumentId(null);
+    }
+  };
+
+  const handleRetryIngestion = async (doc: KnowledgeDocument) => {
+    setRetryingDocumentId(doc.document_id);
+    setDocumentError(null);
+    try {
+      const updated = await retryDocumentIngestion(doc.document_id);
+      setDocuments((prev) =>
+        prev.map((item) =>
+          item.document_id === doc.document_id
+            ? {
+                ...item,
+                status: updated.status,
+                job_id: updated.job_id,
+                attempt_count: updated.attempt_count,
+                max_attempts: updated.max_attempts,
+                last_error: "",
+                is_retrievable: false,
+                index_statuses: {
+                  ...item.index_statuses,
+                  ingestion: "queued",
+                },
+                errors: [],
+              }
+            : item,
+        ),
+      );
+      await refreshDocuments();
+      await refreshIngestionQueue();
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : "重试入库失败");
+    } finally {
+      setRetryingDocumentId(null);
+    }
+  };
+
+  const handleStatusChange = async (
+    doc: KnowledgeDocument,
+    lifecycleStatus: DocumentLifecycleStatus,
+  ) => {
+    if (doc.lifecycle_status === lifecycleStatus) return;
+
+    setUpdatingStatusDocumentId(doc.document_id);
+    setDocumentError(null);
+    try {
+      const updated = await updateDocumentStatus(doc.document_id, lifecycleStatus);
+      setDocuments((prev) =>
+        prev.map((item) =>
+          item.document_id === doc.document_id
+            ? {
+                ...item,
+                lifecycle_status: updated.lifecycle_status,
+                is_retrievable: updated.is_retrievable,
+              }
+            : item,
+        ),
+      );
+      await refreshQuality();
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : "更新文档状态失败");
+    } finally {
+      setUpdatingStatusDocumentId(null);
+    }
+  };
+
+  const handleCancelIngestion = async (doc: KnowledgeDocument) => {
+    setCancellingDocumentId(doc.document_id);
+    setDocumentError(null);
+    try {
+      await cancelDocumentIngestion(doc.document_id);
+      setDocuments((prev) =>
+        prev.map((item) =>
+          item.document_id === doc.document_id
+            ? {
+                ...item,
+                status: "cancelled",
+                is_retrievable: false,
+                index_statuses: {
+                  ...item.index_statuses,
+                  ingestion: "cancelled",
+                },
+              }
+            : item,
+        ),
+      );
+      await refreshDocuments();
+    } catch (error) {
+      setDocumentError(error instanceof Error ? error.message : "取消入库失败");
+    } finally {
+      setCancellingDocumentId(null);
     }
   };
 
@@ -214,6 +364,17 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
   const doneCount = files.filter((f) => f.status === "done").length;
   const errorCount = files.filter((f) => f.status === "error").length;
   const totalChunks = documents.reduce((sum, doc) => sum + doc.chunk_count, 0);
+  const retrievableDocuments = documents.filter((doc) => doc.is_retrievable).length;
+  const activeIngestionCount = documents.filter((doc) =>
+    ["queued", "processing"].includes(doc.status),
+  ).length;
+  const blockedIngestionCount =
+    documents.filter((doc) => ["error", "cancelled"].includes(doc.status)).length +
+    (queueHealth?.dead_letter_length ?? 0);
+  const visibleDocuments =
+    statusFilter === "all"
+      ? documents
+      : documents.filter((doc) => doc.lifecycle_status === statusFilter);
   const averageQuality =
     evaluations.length > 0
       ? evaluations.reduce((sum, item) => sum + item.overall_score, 0) / evaluations.length
@@ -223,10 +384,11 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-5 p-5">
-      <section className="grid gap-3 sm:grid-cols-3">
-        <Metric label="可检索文档" value={documents.length} />
-        <Metric label="片段总数" value={totalChunks} />
-        <Metric label="上传记录" value={files.length} />
+      <section className="grid gap-3 sm:grid-cols-4">
+        <Metric label="文档总数" value={documents.length} />
+        <Metric label="可检索" value={retrievableDocuments} />
+        <Metric label="入库中" value={activeIngestionCount} />
+        <Metric label="待处理失败" value={blockedIngestionCount} />
       </section>
 
       <QualityOverview
@@ -237,6 +399,14 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
         loading={loadingQuality}
         error={qualityError}
         onRefresh={() => void refreshQuality()}
+      />
+
+      <IngestionOpsOverview
+        health={queueHealth}
+        deadLetters={deadLetterJobs}
+        loading={loadingQueueHealth}
+        error={queueError}
+        onRefresh={() => void refreshIngestionQueue()}
       />
 
       <section className="rounded-lg border border-border/70 bg-card/55 p-4">
@@ -339,6 +509,14 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
           </button>
         </div>
 
+        {!documentError && !loadingDocuments && documents.length > 0 && (
+          <DocumentStatusFilters
+            value={statusFilter}
+            documents={documents}
+            onChange={setStatusFilter}
+          />
+        )}
+
         {documentError && (
           <ErrorCallout
             title="无法读取入库文档"
@@ -356,17 +534,28 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
 
         {!documentError && !loadingDocuments && documents.length === 0 && (
           <div className="rounded-lg border border-dashed border-border/80 px-4 py-8 text-center text-sm text-muted-foreground">
-            暂无可检索文档
+            暂无入库文档
           </div>
         )}
 
-        {!documentError && !loadingDocuments && documents.length > 0 && (
+        {!documentError && !loadingDocuments && documents.length > 0 && visibleDocuments.length === 0 && (
+          <div className="rounded-lg border border-dashed border-border/80 px-4 py-8 text-center text-sm text-muted-foreground">
+            当前筛选条件下没有文档
+          </div>
+        )}
+
+        {!documentError && !loadingDocuments && visibleDocuments.length > 0 && (
           <div className="divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70">
-            {documents.map((doc) => {
+            {visibleDocuments.map((doc) => {
               const expanded = expandedDocumentId === doc.document_id;
               const chunks = chunksByDocument[doc.document_id] || [];
               const loadingChunks = chunkLoadingId === doc.document_id;
               const deleting = deletingDocumentId === doc.document_id;
+              const cancelling = cancellingDocumentId === doc.document_id;
+              const retrying = retryingDocumentId === doc.document_id;
+              const updatingStatus = updatingStatusDocumentId === doc.document_id;
+              const canCancelIngestion = ["queued", "processing"].includes(doc.status);
+              const canRetryIngestion = ["error", "cancelled"].includes(doc.status);
 
               return (
                 <div key={doc.document_id} className="bg-background/45" data-testid="knowledge-document-row">
@@ -383,6 +572,16 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
                     <span className="hidden shrink-0 rounded-md border border-border/70 px-2 py-1 text-xs text-muted-foreground sm:inline-flex">
                       {doc.chunk_count} 片段
                     </span>
+                    <DocumentIngestionStatus
+                      status={doc.status}
+                      attemptCount={doc.attempt_count}
+                      maxAttempts={doc.max_attempts}
+                    />
+                    <DocumentStatusSelect
+                      value={doc.lifecycle_status}
+                      disabled={updatingStatus}
+                      onChange={(status) => void handleStatusChange(doc, status)}
+                    />
                     <div className="hidden shrink-0 items-center gap-1 lg:flex">
                       <IndexStatusChips statuses={doc.index_statuses} />
                     </div>
@@ -396,6 +595,34 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
                       <ChevronDown
                         className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")}
                       />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelIngestion(doc)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-amber-400/30 text-amber-300 transition-colors hover:bg-amber-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={`取消入库 ${doc.document_name}`}
+                      disabled={!canCancelIngestion || cancelling}
+                      title="取消入库"
+                    >
+                      {cancelling ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <XCircle className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleRetryIngestion(doc)}
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-sky-400/30 text-sky-300 transition-colors hover:bg-sky-400/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 disabled:cursor-not-allowed disabled:opacity-40"
+                      aria-label={`重试入库 ${doc.document_name}`}
+                      disabled={!canRetryIngestion || retrying}
+                      title="重试入库"
+                    >
+                      {retrying ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <RefreshCw className="h-3.5 w-3.5" />
+                      )}
                     </button>
                     <button
                       type="button"
@@ -417,8 +644,13 @@ export function UploadPanel({ qualityRefreshKey = 0 }: Props) {
                       <div className="mb-3 flex flex-wrap items-center gap-1.5 lg:hidden">
                         <IndexStatusChips statuses={doc.index_statuses} />
                       </div>
-                      {doc.errors.length > 0 && (
+                      {(doc.last_error || doc.errors.length > 0) && (
                         <div className="mb-3 space-y-1">
+                          {doc.last_error && (
+                            <div className="rounded-md border border-destructive/20 bg-destructive/5 px-2 py-1 text-[11px] text-destructive">
+                              {doc.last_error}
+                            </div>
+                          )}
                           {doc.errors.map((error, index) => (
                             <div
                               key={index}
@@ -544,6 +776,246 @@ function UploadRow({ item }: { item: UploadItem }) {
   );
 }
 
+const DOCUMENT_STATUS_OPTIONS: Array<{
+  value: DocumentLifecycleStatus;
+  label: string;
+  icon: typeof Power;
+}> = [
+  { value: "enabled", label: "启用", icon: Power },
+  { value: "disabled", label: "停用", icon: PauseCircle },
+  { value: "test", label: "测试", icon: FlaskConical },
+  { value: "archived", label: "归档", icon: Archive },
+];
+
+function DocumentStatusFilters({
+  value,
+  documents,
+  onChange,
+}: {
+  value: DocumentLifecycleStatus | "all";
+  documents: KnowledgeDocument[];
+  onChange: (value: DocumentLifecycleStatus | "all") => void;
+}) {
+  const counts = documents.reduce<Record<string, number>>(
+    (acc, doc) => {
+      acc.all += 1;
+      acc[doc.lifecycle_status] = (acc[doc.lifecycle_status] || 0) + 1;
+      return acc;
+    },
+    { all: 0, enabled: 0, disabled: 0, test: 0, archived: 0 },
+  );
+  const items = [
+    { value: "all" as const, label: "全部", icon: Database },
+    ...DOCUMENT_STATUS_OPTIONS,
+  ];
+
+  return (
+    <div className="mb-3 flex flex-wrap gap-1.5">
+      {items.map((item) => {
+        const Icon = item.icon;
+        const active = value === item.value;
+        return (
+          <button
+            key={item.value}
+            type="button"
+            onClick={() => onChange(item.value)}
+            className={cn(
+              "inline-flex h-8 items-center gap-1.5 rounded-md border px-2 text-xs transition-colors",
+              active
+                ? "border-primary/40 bg-primary/10 text-primary"
+                : "border-border/70 text-muted-foreground hover:bg-muted hover:text-foreground",
+            )}
+          >
+            <Icon className="h-3.5 w-3.5" />
+            {item.label}
+            <span className="font-mono text-[10px] opacity-75">{counts[item.value] || 0}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DocumentStatusSelect({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: DocumentLifecycleStatus;
+  disabled: boolean;
+  onChange: (value: DocumentLifecycleStatus) => void;
+}) {
+  return (
+    <label className="relative shrink-0">
+      <span className="sr-only">文档状态</span>
+      <select
+        data-testid="knowledge-document-status"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value as DocumentLifecycleStatus)}
+        className={cn(
+          "h-8 rounded-md border bg-background px-2 pr-7 text-xs outline-none transition-colors",
+          "focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60",
+          documentStatusTone(value),
+        )}
+      >
+        {DOCUMENT_STATUS_OPTIONS.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      {disabled && (
+        <Loader2 className="pointer-events-none absolute right-2 top-2 h-3.5 w-3.5 animate-spin text-muted-foreground" />
+      )}
+    </label>
+  );
+}
+
+function DocumentIngestionStatus({
+  status,
+  attemptCount = 0,
+  maxAttempts = 0,
+}: {
+  status: string;
+  attemptCount?: number;
+  maxAttempts?: number;
+}) {
+  const label = ingestionStatusLabel(status);
+  const active = status === "queued" || status === "processing";
+  const failed = status === "error";
+  const attemptLabel = maxAttempts > 0 && (active || failed) ? ` ${attemptCount}/${maxAttempts}` : "";
+  return (
+    <span
+      className={cn(
+        "inline-flex h-8 shrink-0 items-center gap-1 rounded-md border px-2 text-xs",
+        active && "border-sky-400/35 bg-sky-400/10 text-sky-300",
+        failed && "border-destructive/35 bg-destructive/10 text-destructive",
+        status === "partial" && "border-amber-400/35 bg-amber-400/10 text-amber-300",
+        status === "cancelled" && "border-border/70 bg-muted/30 text-muted-foreground",
+        (status === "ready" || status === "duplicate") && "border-success/35 bg-success/10 text-success",
+      )}
+    >
+      {active && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+      {!active && failed && <AlertCircle className="h-3.5 w-3.5" />}
+      {!active && !failed && <CheckCircle className="h-3.5 w-3.5" />}
+      {label}
+      {attemptLabel && <span className="font-mono opacity-80">{attemptLabel}</span>}
+    </span>
+  );
+}
+
+function ingestionStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    queued: "排队中",
+    processing: "入库中",
+    ready: "已就绪",
+    partial: "部分就绪",
+    error: "失败",
+    duplicate: "已存在",
+    cancelled: "已取消",
+  };
+  return labels[status] || status;
+}
+
+function documentStatusTone(status: DocumentLifecycleStatus) {
+  const tones: Record<DocumentLifecycleStatus, string> = {
+    enabled: "border-success/35 text-success",
+    disabled: "border-amber-400/35 text-amber-300",
+    test: "border-sky-400/35 text-sky-300",
+    archived: "border-border/70 text-muted-foreground",
+  };
+  return tones[status];
+}
+
+function IngestionOpsOverview({
+  health,
+  deadLetters,
+  loading,
+  error,
+  onRefresh,
+}: {
+  health: IngestionQueueHealth | null;
+  deadLetters: IngestionDeadLetterJob[];
+  loading: boolean;
+  error: string | null;
+  onRefresh: () => void;
+}) {
+  return (
+    <section
+      className="rounded-lg border border-border/70 bg-card/55 p-4"
+      data-testid="knowledge-ingestion-ops"
+    >
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-sm font-semibold">入库队列</h2>
+          <p className="mt-1 text-xs text-muted-foreground">
+            监控异步入库队列、失败队列和 worker 模式。
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+          aria-label="刷新入库队列"
+          disabled={loading}
+        >
+          <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+        </button>
+      </div>
+
+      {error && (
+        <div className="mb-3 rounded-md border border-destructive/25 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          {error}
+        </div>
+      )}
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <QualityMetric label="模式" value={health?.mode || "--"} />
+        <QualityMetric label="等待" value={String(health?.queue_length ?? "--")} />
+        <QualityMetric
+          label="DLQ"
+          value={String(health?.dead_letter_length ?? "--")}
+          tone={(health?.dead_letter_length || 0) > 0 ? "bad" : "ok"}
+        />
+        <QualityMetric
+          label="Redis"
+          value={health ? (health.redis_available ? "OK" : "离线") : "--"}
+          tone={health?.redis_available ? "ok" : "neutral"}
+        />
+      </div>
+
+      {health && (
+        <div className="mt-3 truncate text-[11px] text-muted-foreground">
+          {health.queue_name} / {health.dlq_name}
+        </div>
+      )}
+
+      {deadLetters.length > 0 && (
+        <div className="mt-3 divide-y divide-border/60 overflow-hidden rounded-lg border border-border/70">
+          {deadLetters.map((job, index) => (
+            <div key={`${job.job_id || index}`} className="bg-background/45 px-3 py-2 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate font-medium text-foreground">
+                  {job.filename || job.document_id || "unknown job"}
+                </span>
+                <span className="shrink-0 font-mono text-[11px] text-destructive">
+                  {job.attempt ? `#${job.attempt}` : "DLQ"}
+                </span>
+              </div>
+              {job.last_error && (
+                <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                  {job.last_error}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function QualityOverview({
   evaluations,
   averageQuality,
@@ -580,16 +1052,16 @@ function QualityOverview({
     >
       <div className="mb-3 flex items-center justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">Answer quality</h2>
+          <h2 className="text-sm font-semibold">回答质量</h2>
           <p className="mt-1 text-xs text-muted-foreground">
-            Recent RAG answers scored by groundedness, relevance, citations, and retrieval.
+            最近问答会按事实支撑、回答相关、引用覆盖和检索质量进行评分。
           </p>
         </div>
         <button
           type="button"
           onClick={onRefresh}
           className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-border/70 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
-          aria-label="Refresh answer quality"
+          aria-label="刷新回答质量"
           disabled={loading}
         >
           <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
@@ -598,13 +1070,13 @@ function QualityOverview({
 
       <div className="grid gap-3 sm:grid-cols-4">
         <QualityMetric
-          label="Avg Quality"
+          label="平均质量"
           value={averageQuality == null ? "--" : formatPercent(averageQuality)}
           testId="knowledge-quality-average"
         />
-        <QualityMetric label="Pass" value={passCount.toString()} />
-        <QualityMetric label="Warn" value={warningQualityCount.toString()} />
-        <QualityMetric label="Fail" value={lowQualityCount.toString()} tone={lowQualityCount > 0 ? "bad" : "ok"} />
+        <QualityMetric label="通过" value={passCount.toString()} />
+        <QualityMetric label="预警" value={warningQualityCount.toString()} />
+        <QualityMetric label="失败" value={lowQualityCount.toString()} tone={lowQualityCount > 0 ? "bad" : "ok"} />
       </div>
 
       {error && (
@@ -616,13 +1088,13 @@ function QualityOverview({
       {!error && loading && evaluations.length === 0 && (
         <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Loading quality scores
+          正在读取质量评分
         </div>
       )}
 
       {!error && !loading && evaluations.length === 0 && (
         <div className="mt-3 rounded-md border border-dashed border-border/70 px-3 py-3 text-xs text-muted-foreground">
-          No scored answers yet.
+          暂无已评分回答。
         </div>
       )}
 
@@ -633,7 +1105,7 @@ function QualityOverview({
               key={issue}
               className="rounded-md border border-amber-400/30 bg-amber-400/10 px-2 py-1 text-[11px] text-amber-300"
             >
-              {issue.replace(/_/g, " ")} x{count}
+              {qualityIssueLabel(issue)} x{count}
             </span>
           ))}
         </div>
@@ -650,9 +1122,9 @@ function QualityOverview({
               <div className="min-w-0">
                 <div className="truncate font-medium text-foreground">{item.query}</div>
                 <div className="mt-1 flex flex-wrap gap-1.5 text-[10px] text-muted-foreground">
-                  <span>grounded {formatPercent(item.groundedness)}</span>
-                  <span>citations {formatPercent(item.citation_coverage)}</span>
-                  <span>retrieval {formatPercent(item.retrieval_quality)}</span>
+                  <span>事实支撑 {formatPercent(item.groundedness)}</span>
+                  <span>引用覆盖 {formatPercent(item.citation_coverage)}</span>
+                  <span>检索质量 {formatPercent(item.retrieval_quality)}</span>
                 </div>
               </div>
               <span
@@ -706,6 +1178,21 @@ function formatPercent(value: number) {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
+function qualityIssueLabel(issue: string) {
+  const labels: Record<string, string> = {
+    empty_answer: "回答为空",
+    no_context: "缺少检索上下文",
+    no_citations: "缺少引用来源",
+    low_groundedness: "事实支撑度偏低",
+    low_answer_relevance: "回答相关性偏低",
+    low_relevance: "回答相关性偏低",
+    low_citation_coverage: "引用覆盖不足",
+    low_retrieval_quality: "检索质量偏弱",
+    weak_retrieval: "检索质量偏弱",
+  };
+  return labels[issue] || issue.replace(/_/g, " ");
+}
+
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div className="rounded-lg border border-border/70 bg-card/55 px-4 py-3">
@@ -726,6 +1213,7 @@ function IndexStatusChips({ statuses }: { statuses: Record<string, string> }) {
     <>
       {items.map(([key, label]) => {
         const status = statuses?.[key] || "unknown";
+        const statusText = indexStatusLabel(status);
         return (
           <span
             key={key}
@@ -736,12 +1224,25 @@ function IndexStatusChips({ statuses }: { statuses: Record<string, string> }) {
               status === "error" && "border-destructive/30 bg-destructive/10 text-destructive",
               status === "unknown" && "border-border/70 bg-muted/30 text-muted-foreground",
             )}
-            title={`${label}: ${status}`}
+            title={`${label}：${statusText}`}
           >
-            {label}:{status}
+            {label}：{statusText}
           </span>
         );
       })}
     </>
   );
+}
+
+function indexStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    queued: "排队",
+    processing: "处理中",
+    ready: "就绪",
+    skipped: "跳过",
+    error: "失败",
+    cancelled: "已取消",
+    unknown: "未知",
+  };
+  return labels[status] || status;
 }

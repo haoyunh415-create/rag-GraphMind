@@ -46,7 +46,10 @@ test("user can upload, ask a grounded question, see citations, and inspect trace
           if (!response.ok()) return null;
           const payload = await response.json();
           const doc = payload.documents.find((item: any) => item.document_name === fileName);
-          return doc?.document_id || null;
+          if (!doc || !["ready", "partial", "duplicate"].includes(doc.status) || !doc.is_retrievable) {
+            return null;
+          }
+          return doc.document_id || null;
         },
         { timeout: 30_000 },
       )
@@ -57,12 +60,21 @@ test("user can upload, ask a grounded question, see citations, and inspect trace
     const docsPayload = await docsResponse.json();
     const uploadedDoc = docsPayload.documents.find((doc: any) => doc.document_name === fileName);
     expect(uploadedDoc).toBeTruthy();
+    expect(uploadedDoc.lifecycle_status).toBe("enabled");
+    expect(uploadedDoc.is_retrievable).toBe(true);
     documentId = uploadedDoc.document_id;
 
     await page.getByTestId("tab-knowledge").click();
     await expect(page.getByTestId("panel-knowledge")).toBeVisible();
     await page.getByTestId("knowledge-refresh").click();
-    await expect(page.getByTestId("knowledge-document-row").filter({ hasText: fileName })).toBeVisible();
+    const documentRow = page.getByTestId("knowledge-document-row").filter({ hasText: fileName });
+    await expect(documentRow).toBeVisible();
+    const statusSelect = documentRow.getByTestId("knowledge-document-status");
+    await expect(statusSelect).toHaveValue("enabled");
+    await statusSelect.selectOption("test");
+    await expect(statusSelect).toHaveValue("test");
+    await statusSelect.selectOption("enabled");
+    await expect(statusSelect).toHaveValue("enabled");
 
     await page.getByTestId("tab-chat").click();
     await page.getByTestId("chat-mode-kb").click();
@@ -95,7 +107,8 @@ test("user can upload, ask a grounded question, see citations, and inspect trace
     await expect(page.getByTestId("panel-trace")).toBeVisible();
     await expect(page.getByTestId("trace-card")).toBeVisible();
     await expect(page.getByTestId("trace-card")).toContainText("beta interface");
-    await expect(page.getByTestId("trace-card")).toContainText("Quality");
+    await expect(page.getByTestId("trace-card")).toContainText("质量");
+    await expect(page.getByTestId("trace-card")).toContainText("引用裁剪");
     await expect(page.getByTestId("trace-quality-card")).toBeVisible();
     await expect(page.getByTestId("trace-quality-overall")).toContainText(/%/);
     await expect(page.getByTestId("trace-quality-metric")).toHaveCount(4);

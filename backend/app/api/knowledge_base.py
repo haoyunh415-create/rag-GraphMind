@@ -1,11 +1,12 @@
 import asyncio
 import time
 from pathlib import Path
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from loguru import logger
 
 from app.agents.tools import synthesize_answer
 from app.core.config import get_settings
+from app.core.security import require_api_auth
 from app.evaluation.rag_quality import evaluate_rag_answer
 from app.evaluation.store import EvaluationStore
 from app.models.schemas import (
@@ -20,7 +21,7 @@ from app.retrieval.bm25_search import BM25Search
 from app.retrieval.knowledge_graph import KnowledgeGraph
 from app.retrieval.health import retrieval_health
 
-router = APIRouter(prefix="/api/kb", tags=["knowledge-base"])
+router = APIRouter(prefix="/api/kb", tags=["知识库"], dependencies=[Depends(require_api_auth)])
 EXTERNAL_STATS_TIMEOUT_SECONDS = 1.5
 
 
@@ -113,13 +114,20 @@ async def list_documents():
 
 @router.post("/evaluate", response_model=EvaluationResult)
 async def evaluate_rag(request: EvaluationRequest):
-    """Evaluate a RAG answer against real retrieved/provided context."""
+    """基于真实检索上下文评估 RAG 回答质量。"""
     started_at = time.perf_counter()
     contexts = [ctx.model_dump() for ctx in request.contexts]
     answer = (request.answer or "").strip()
 
     if not contexts:
-        contexts = await VectorStore().search(request.query, request.top_k)
+        vs = VectorStore()
+        enabled_document_ids = await vs.list_retrievable_document_ids()
+        raw_contexts = await vs.search(request.query, min(request.top_k * 3, 50))
+        contexts = [
+            ctx
+            for ctx in raw_contexts
+            if str(ctx.get("document_id") or "") in enabled_document_ids
+        ][: request.top_k]
 
     if not answer:
         if contexts:
@@ -128,7 +136,7 @@ async def evaluate_rag(request: EvaluationRequest):
                 answer_parts.append(token)
             answer = "".join(answer_parts).strip()
         else:
-            answer = "No relevant documents were found in the knowledge base."
+            answer = "知识库中没有找到相关文档。"
 
     result = evaluate_rag_answer(
         query=request.query,

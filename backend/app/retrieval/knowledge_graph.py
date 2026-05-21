@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
-from neo4j import AsyncGraphDatabase, AsyncDriver
+from neo4j import AsyncDriver, AsyncGraphDatabase
 from loguru import logger
 
 from app.core.config import get_settings
@@ -15,9 +14,9 @@ class KnowledgeGraph:
 
     Schema:
       (:Entity {id, name, type, properties})
-      (:Chunk  {id, text, document_id})
+      (:Chunk  {id, text, document_id, document_name, chunk_index})
       (:Entity)-[:MENTIONED_IN]->(:Chunk)
-      (:Entity)-[:RELATES_TO {type, properties}]->(:Entity)
+      (:Entity)-[:RELATES_TO {type, properties}]-(:Entity)
     """
 
     def __init__(self):
@@ -25,12 +24,8 @@ class KnowledgeGraph:
         self._driver: AsyncDriver | None = None
         self._initialized = False
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     async def search(self, query: str, top_k: int = 10) -> list[dict[str, Any]]:
-        """Entity-aware graph search: extract entities from query → Cypher traversal → chunks."""
+        """Extract query entities, follow graph relation paths, and return evidence chunks."""
         entity_names = await extract_query_entities(query)
         if not entity_names:
             return []
@@ -39,41 +34,51 @@ class KnowledgeGraph:
         await self._ensure_schema()
 
         results: list[dict] = []
-
         async with driver.session() as session:
-            # Strategy 1: Exact entity match → neighbours → chunks
             exact = await session.run(
                 """
                 MATCH (e:Entity)
                 WHERE toLower(e.name) IN $names
-                OPTIONAL MATCH (e)-[:RELATES_TO]->(related:Entity)
-                OPTIONAL MATCH (e)-[:MENTIONED_IN]->(c:Chunk)
-                OPTIONAL MATCH (related)-[:MENTIONED_IN]->(rc:Chunk)
+                OPTIONAL MATCH path = (e)-[:RELATES_TO*0..2]-(related:Entity)
+                WITH e, related, path
+                OPTIONAL MATCH (related)-[:MENTIONED_IN]->(c:Chunk)
                 RETURN e.name AS entity, e.type AS entity_type,
-                       collect(DISTINCT related.name) AS neighbours,
-                       collect(DISTINCT {id: c.id, text: c.text, document_id: c.document_id}) AS chunks,
-                       collect(DISTINCT {id: rc.id, text: rc.text, document_id: rc.document_id}) AS neighbour_chunks
+                       related.name AS matched_entity,
+                       related.type AS matched_entity_type,
+                       [node IN nodes(path) | node.name] AS path_entities,
+                       [rel IN relationships(path) | rel.type] AS path_relations,
+                       collect(DISTINCT {
+                           id: c.id,
+                           text: c.text,
+                           document_id: c.document_id,
+                           document_name: c.document_name,
+                           chunk_index: c.chunk_index
+                       }) AS chunks
                 LIMIT $limit
                 """,
                 names=[n.lower().strip() for n in entity_names],
                 limit=top_k,
             )
             async for record in exact:
-                for chunk in (record.get("chunks") or []) + (record.get("neighbour_chunks") or []):
+                for chunk in record.get("chunks") or []:
                     if chunk and chunk.get("id"):
                         results.append({
                             "id": chunk["id"],
                             "text": chunk["text"],
                             "document_id": chunk.get("document_id", ""),
+                            "document_name": chunk.get("document_name", ""),
+                            "chunk_index": chunk.get("chunk_index", 0),
                             "source": "graph",
                             "graph_context": {
                                 "entity": record["entity"],
                                 "entity_type": record["entity_type"],
-                                "neighbours": record.get("neighbours", []),
+                                "matched_entity": record.get("matched_entity"),
+                                "matched_entity_type": record.get("matched_entity_type"),
+                                "path_entities": record.get("path_entities") or [],
+                                "path_relations": record.get("path_relations") or [],
                             },
                         })
 
-            # Strategy 2: Fuzzy substring match on entity names
             if not results:
                 for name in entity_names:
                     fuzzy = await session.run(
@@ -82,7 +87,13 @@ class KnowledgeGraph:
                         WHERE e.name CONTAINS $name OR $name CONTAINS e.name
                         MATCH (e)-[:MENTIONED_IN]->(c:Chunk)
                         RETURN e.name AS entity, e.type AS entity_type,
-                               collect(DISTINCT {id: c.id, text: c.text, document_id: c.document_id}) AS chunks
+                               collect(DISTINCT {
+                                   id: c.id,
+                                   text: c.text,
+                                   document_id: c.document_id,
+                                   document_name: c.document_name,
+                                   chunk_index: c.chunk_index
+                               }) AS chunks
                         LIMIT $limit
                         """,
                         name=name,
@@ -95,20 +106,23 @@ class KnowledgeGraph:
                                     "id": chunk["id"],
                                     "text": chunk["text"],
                                     "document_id": chunk.get("document_id", ""),
+                                    "document_name": chunk.get("document_name", ""),
+                                    "chunk_index": chunk.get("chunk_index", 0),
                                     "source": "graph",
                                     "graph_context": {
                                         "entity": record["entity"],
                                         "entity_type": record["entity_type"],
+                                        "path_entities": [record["entity"]],
+                                        "path_relations": [],
                                     },
                                 })
 
-        # Deduplicate by chunk id
         seen = set()
         unique: list[dict] = []
-        for r in results:
-            if r["id"] not in seen:
-                seen.add(r["id"])
-                unique.append(r)
+        for result in results:
+            if result["id"] not in seen:
+                seen.add(result["id"])
+                unique.append(result)
 
         return unique[:top_k]
 
@@ -121,10 +135,9 @@ class KnowledgeGraph:
         await self._ensure_schema()
 
         async with driver.session() as session:
-            # Upsert entities and link to chunks
-            for e in entities:
-                chunk_ids = e.get("source_chunk_ids", [])
-                props = e.get("properties", {})
+            for entity in entities:
+                chunk_ids = entity.get("source_chunk_ids", [])
+                props = entity.get("properties", {})
                 await session.run(
                     """
                     MERGE (ent:Entity {name: $name})
@@ -132,25 +145,23 @@ class KnowledgeGraph:
                         ent += $properties,
                         ent.id = coalesce(ent.id, randomUUID())
                     """,
-                    name=e["name"],
-                    type=e.get("type", "CONCEPT"),
+                    name=entity["name"],
+                    type=entity.get("type", "CONCEPT"),
                     properties=props,
                 )
-                # Link entity to source chunks
-                for cid in chunk_ids:
+                for chunk_id in chunk_ids:
                     await session.run(
                         """
                         MATCH (ent:Entity {name: $name})
                         MERGE (ch:Chunk {id: $chunk_id})
                         MERGE (ent)-[:MENTIONED_IN]->(ch)
                         """,
-                        name=e["name"],
-                        chunk_id=cid,
+                        name=entity["name"],
+                        chunk_id=chunk_id,
                     )
 
-            # Upsert relations
-            for r in relations:
-                props = r.get("properties", {})
+            for relation in relations:
+                props = relation.get("properties", {})
                 await session.run(
                     """
                     MATCH (a:Entity {name: $source})
@@ -158,32 +169,34 @@ class KnowledgeGraph:
                     MERGE (a)-[rel:RELATES_TO {type: $type}]->(b)
                     SET rel += $properties
                     """,
-                    source=r["source"],
-                    target=r["target"],
-                    type=r.get("type", "RELATED_TO"),
+                    source=relation["source"],
+                    target=relation["target"],
+                    type=relation.get("type", "RELATED_TO"),
                     properties=props,
                 )
 
         logger.info(f"Upserted {len(entities)} entities and {len(relations)} relations")
 
     async def link_chunks(self, chunks: list[dict]) -> bool:
-        """Create Chunk nodes (if they don't exist) so MENTIONED_IN relationships have targets."""
+        """Create Chunk nodes so MENTIONED_IN relationships have retrievable targets."""
         driver = self._get_driver()
         await self._ensure_schema()
 
         async with driver.session() as session:
-            for c in chunks:
+            for chunk in chunks:
                 await session.run(
                     """
                     MERGE (ch:Chunk {id: $id})
                     SET ch.text = $text,
                         ch.document_id = $document_id,
+                        ch.document_name = $document_name,
                         ch.chunk_index = $chunk_index
                     """,
-                    id=c["id"],
-                    text=c.get("text", ""),
-                    document_id=c.get("document_id", ""),
-                    chunk_index=c.get("chunk_index", 0),
+                    id=chunk["id"],
+                    text=chunk.get("text", ""),
+                    document_id=chunk.get("document_id", ""),
+                    document_name=chunk.get("document_name", ""),
+                    chunk_index=chunk.get("chunk_index", 0),
                 )
         logger.info(f"Linked {len(chunks)} chunk nodes in graph")
         return True
@@ -236,10 +249,6 @@ class KnowledgeGraph:
                 }
             return {"entities": 0, "relations": 0, "mentions": 0}
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
     def _get_driver(self) -> AsyncDriver:
         if self._driver is None:
             self._driver = AsyncGraphDatabase.driver(
@@ -264,5 +273,5 @@ class KnowledgeGraph:
                 await session.run("CREATE INDEX chunk_id IF NOT EXISTS FOR (c:Chunk) ON (c.id)")
                 await session.run("CREATE INDEX entity_type IF NOT EXISTS FOR (e:Entity) ON (e.type)")
             except Exception:
-                pass  # constraints/indexes may already exist
+                pass
         self._initialized = True

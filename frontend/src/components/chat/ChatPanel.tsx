@@ -68,6 +68,35 @@ function formatLatency(ms: number | null) {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 
+function retrievalSourceLabel(source: string) {
+  const labels: Record<string, string> = {
+    vector: "向量",
+    bm25: "BM25",
+    graph: "图谱",
+  };
+  return labels[source] || source;
+}
+
+function streamStatusLabel(status: string) {
+  const labels: Record<string, string> = {
+    queued: "准备",
+    routing: "路由",
+    chat: "聊天",
+    decomposing: "分解",
+    retrieving: "检索",
+    ranking: "排序",
+    generating: "生成",
+    evaluation: "质量评估",
+  };
+  return labels[status] || status;
+}
+
+function qualityLabel(label: EvaluationResult["label"]) {
+  if (label === "pass") return "通过";
+  if (label === "warn") return "预警";
+  return "失败";
+}
+
 function StreamStatusBar({
   activeStep,
   firstTokenMs,
@@ -140,7 +169,7 @@ function StreamStatusBar({
                         : "border-warning/35 bg-warning/10 text-warning",
                     )}
                   >
-                    {name}:{available ? "on" : "off"}
+                    {retrievalSourceLabel(name)}：{available ? "可用" : "关闭"}
                   </span>
                 );
               })}
@@ -404,7 +433,7 @@ export function ChatPanel({ onTrace, onEvaluation }: Props) {
     setInput("");
     setShouldAutoScroll(true);
     setStreaming(true);
-    setStatusText("queued: Preparing request");
+    setStatusText("准备：正在发送请求");
     setActiveStep("queued");
     setFirstTokenMs(null);
     setBackendStatuses(null);
@@ -458,14 +487,16 @@ export function ChatPanel({ onTrace, onEvaluation }: Props) {
       },
       (status: string, detail: string, data?: any) => {
         setActiveStep(STATUS_TO_STEP[status] || "queued");
-        setStatusText(`${status}: ${detail}`);
+        setStatusText(`${streamStatusLabel(status)}：${detail}`);
         if (data?.backends) {
           setBackendStatuses(data.backends);
         }
       },
       (evaluation: EvaluationResult) => {
         onEvaluation?.(evaluation);
-        setStatusText(`quality: ${(evaluation.overall_score * 100).toFixed(0)}% ${evaluation.label}`);
+        setStatusText(
+          `质量评分：${(evaluation.overall_score * 100).toFixed(0)}% ${qualityLabel(evaluation.label)}`,
+        );
       },
       (trace: Trace) => {
         onTrace?.(trace);

@@ -167,7 +167,7 @@ async def synthesize_answer(
     client = get_llm_client()
 
     if not contexts:
-        yield "No relevant documents found in the knowledge base. Try uploading some documents first."
+        yield "知识库中没有找到相关文档。请先上传文档，或换个问题重试。"
         return
 
     # --- Check cache first ---
@@ -267,7 +267,7 @@ Guidelines:
 - If the user asks about their documents or data, suggest they upload relevant files
 - Use markdown formatting when it improves readability"""
 
-KB_FALLBACK_NOTE = "\n\n> *Note: no matching documents were found in your knowledge base. The answer above is based on general knowledge.*"
+KB_FALLBACK_NOTE = "\n\n> *说明：知识库中没有找到匹配文档，上面的回答基于通用知识生成。*"
 
 
 async def classify_intent(query: str) -> str:
@@ -357,4 +357,4 @@ async def direct_chat(
 
     except Exception as e:
         logger.error(f"Direct chat failed: {e}")
-        yield f"[Error: {e}]"
+        yield f"[错误：{e}]"

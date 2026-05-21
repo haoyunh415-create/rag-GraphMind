@@ -52,8 +52,10 @@ class DocumentUploadResponse(BaseModel):
     filename: str
     chunk_count: int
     status: str
+    job_id: Optional[str] = None
     index_statuses: dict[str, str] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
+    lifecycle_status: Literal["enabled", "disabled", "test", "archived"] = "enabled"
 
 
 class KnowledgeBaseStats(BaseModel):
@@ -69,6 +71,13 @@ class KnowledgeBaseDocument(BaseModel):
     document_name: str
     chunk_count: int
     status: str = "ready"
+    job_id: Optional[str] = None
+    attempt_count: int = 0
+    max_attempts: int = 0
+    last_error: str = ""
+    updated_at: str = ""
+    lifecycle_status: Literal["enabled", "disabled", "test", "archived"] = "enabled"
+    is_retrievable: bool = True
     index_statuses: dict[str, str] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
 
@@ -88,6 +97,16 @@ class DocumentChunk(BaseModel):
 class DocumentChunksResponse(BaseModel):
     document_id: str
     chunks: list[DocumentChunk] = Field(default_factory=list)
+
+
+class DocumentStatusUpdateRequest(BaseModel):
+    lifecycle_status: Literal["enabled", "disabled", "test", "archived"]
+
+
+class DocumentStatusUpdateResponse(BaseModel):
+    document_id: str
+    lifecycle_status: Literal["enabled", "disabled", "test", "archived"]
+    is_retrievable: bool
 
 
 class EvaluationContext(BaseModel):

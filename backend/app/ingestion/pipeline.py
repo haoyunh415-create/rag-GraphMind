@@ -11,6 +11,7 @@ from app.retrieval.bm25_search import BM25Search
 from app.retrieval.knowledge_graph import KnowledgeGraph
 from app.retrieval.extractor import extract_from_chunks
 from app.retrieval.health import retrieval_health
+from app.core.config import get_settings
 
 
 @dataclass
@@ -29,6 +30,7 @@ class IngestionPipeline:
         self.vector_store = VectorStore()
         self.bm25 = BM25Search()
         self.graph = KnowledgeGraph()
+        self.settings = get_settings()
 
     async def ingest(
         self,
@@ -89,7 +91,16 @@ class IngestionPipeline:
         # Entity extraction + graph insertion runs as a fire-and-forget task
         # (it's the slowest step — LLM calls per batch)
         if index_statuses.get("graph") == "ready":
-            asyncio.create_task(self._extract_and_index_entities(chunks))
+            if not self.settings.graph_entity_extraction_enabled:
+                index_statuses["graph_extract"] = "skipped"
+            elif self.settings.graph_entity_extraction_sync:
+                extraction_status, extraction_error = await self._extract_and_index_entities(chunks)
+                index_statuses["graph_extract"] = extraction_status
+                if extraction_error:
+                    errors.append(f"graph_extract: {extraction_error}")
+            else:
+                index_statuses["graph_extract"] = "queued"
+                asyncio.create_task(self._extract_and_index_entities(chunks))
 
         logger.info(
             f"Ingested '{document_name or file_path.name}': {len(chunks)} chunks | "
@@ -101,10 +112,16 @@ class IngestionPipeline:
             errors=errors,
         )
 
-    async def _extract_and_index_entities(self, chunks: list[dict]) -> None:
+    async def _extract_and_index_entities(self, chunks: list[dict]) -> tuple[str, str | None]:
         try:
-            result = await extract_from_chunks(chunks)
+            result = await asyncio.wait_for(
+                extract_from_chunks(chunks),
+                timeout=self.settings.graph_entity_extraction_timeout_seconds,
+            )
             if result.entities:
                 await self.graph.upsert_entities(result.entities, result.relations)
+                return "ready", None
+            return "empty", None
         except Exception as e:
             logger.error(f"Background entity extraction failed: {e}")
+            return "error", str(e)

@@ -7,6 +7,7 @@ from app.agents.tools import decompose_query, synthesize_answer, classify_intent
 from app.retrieval.vector_store import VectorStore
 from app.retrieval.knowledge_graph import KnowledgeGraph
 from app.retrieval.bm25_search import BM25Search
+from app.retrieval.citation_pruner import prune_citations_with_report
 from app.retrieval.fusion import FusionRanker
 from app.retrieval.health import retrieval_health
 from app.core.config import get_settings
@@ -47,7 +48,7 @@ class AgentOrchestrator:
                 trace.add_step("history", {"turns": len(history)})
 
         # --- Step 0.5: Intent routing ---
-        yield {"type": "status", "data": {"status": "routing", "detail": "Classifying query intent"}}
+        yield {"type": "status", "data": {"status": "routing", "detail": "正在判断是否需要检索知识库"}}
         await asyncio.sleep(0)
 
         if self.mode == "kb":
@@ -60,7 +61,7 @@ class AgentOrchestrator:
 
         if intent == "chat":
             # General chat — skip retrieval, stream directly
-            yield {"type": "status", "data": {"status": "chat", "detail": "Chat mode"}}
+            yield {"type": "status", "data": {"status": "chat", "detail": "聊天模式，跳过知识库检索"}}
             await asyncio.sleep(0)
 
             buffer: list[str] = []
@@ -80,24 +81,35 @@ class AgentOrchestrator:
             return
 
         try:
-            chunk_count = await asyncio.wait_for(self.vector_store.count(), timeout=2.0)
+            documents = await asyncio.wait_for(self.vector_store.list_documents(), timeout=2.0)
         except Exception as e:
-            logger.warning(f"Knowledge base count failed, continuing with retrieval: {e}")
-            chunk_count = -1
+            logger.warning(f"Knowledge base document listing failed, continuing with retrieval: {e}")
+            documents = []
 
-        if chunk_count == 0:
+        enabled_document_ids = {
+            str(doc.get("document_id") or "")
+            for doc in documents
+            if doc.get("document_id") and doc.get("is_retrievable", True)
+        }
+        trace.add_step("document_filter", {
+            "total_documents": len(documents),
+            "enabled_documents": len(enabled_document_ids),
+            "allowed_lifecycle_status": "enabled",
+        })
+
+        if not documents or not enabled_document_ids:
             if self.mode == "kb":
-                message = "当前知识库为空，无法基于文档回答。请先上传可检索文档，或切换到聊天模式。"
-                yield {"type": "status", "data": {"status": "blocked", "detail": "Knowledge base is empty"}}
+                message = "当前知识库没有启用文档，无法基于文档回答。请先上传或启用可检索文档，或切换到聊天模式。"
+                yield {"type": "status", "data": {"status": "blocked", "detail": "知识库没有启用文档"}}
                 yield {"type": "citations", "data": []}
                 yield {"type": "chunk", "data": message}
-                trace.add_step("blocked_empty_kb", {"reason": "empty_knowledge_base", "tokens": 1})
+                trace.add_step("blocked_empty_kb", {"reason": "no_enabled_documents", "tokens": 1})
                 evaluation = await self._evaluate_turn(trace, query, message, [])
                 yield {"type": "evaluation", "data": evaluation.model_dump()}
                 yield {"type": "trace", "data": trace.to_dict()}
                 return
 
-            yield {"type": "status", "data": {"status": "chat", "detail": "Knowledge base is empty; using general chat"}}
+            yield {"type": "status", "data": {"status": "chat", "detail": "知识库没有启用文档，改用通用聊天"}}
             await asyncio.sleep(0)
 
             buffer: list[str] = []
@@ -117,7 +129,7 @@ class AgentOrchestrator:
             return
 
         # --- Step 1: Decompose ---
-        yield {"type": "status", "data": {"status": "decomposing", "detail": "Breaking down query into sub-questions"}}
+        yield {"type": "status", "data": {"status": "decomposing", "detail": "正在拆解问题"}}
         await asyncio.sleep(0)
 
         sub_queries = await decompose_query(query)
@@ -125,29 +137,31 @@ class AgentOrchestrator:
         trace.add_step("decompose", {"sub_queries": sub_queries})
 
         # --- Step 2: Parallel retrieval ---
-        yield {"type": "status", "data": {"status": "retrieving", "detail": f"Searching across {len(sub_queries)} sub-queries"}}
+        yield {"type": "status", "data": {"status": "retrieving", "detail": f"正在检索 {len(sub_queries)} 个子问题"}}
         await asyncio.sleep(0)
 
         backend_health = await retrieval_health()
-        yield {"type": "status", "data": {"status": "retrieving", "detail": "Checking retrieval backends", "backends": backend_health}}
+        yield {"type": "status", "data": {"status": "retrieving", "detail": "正在检查检索后端", "backends": backend_health}}
         await asyncio.sleep(0)
         trace.add_step("backend_health", {"backends": backend_health})
 
         all_results: list[dict] = []
         retrieval_counts = {"vector": 0, "graph": 0, "bm25": 0}
+        filtered_counts = {"vector": 0, "graph": 0, "bm25": 0}
         retrieval_errors: list[str] = []
         retrieval_details: list[dict] = []
+        search_k = min(max(self.top_k * 3, self.top_k), 50)
 
         for sq in sub_queries:
             jobs: dict[str, asyncio.Future] = {
-                "vector": self.vector_store.search(sq, self.top_k),
+                "vector": self.vector_store.search(sq, search_k),
             }
             if backend_health["graph"]["available"]:
-                jobs["graph"] = self.graph.search(sq, self.top_k)
+                jobs["graph"] = self.graph.search(sq, search_k)
             else:
                 retrieval_errors.append(f"graph: {backend_health['graph']['detail']}")
             if backend_health["bm25"]["available"]:
-                jobs["bm25"] = self.bm25.search(sq, self.top_k)
+                jobs["bm25"] = self.bm25.search(sq, search_k)
             else:
                 retrieval_errors.append(f"bm25: {backend_health['bm25']['detail']}")
 
@@ -166,25 +180,29 @@ class AgentOrchestrator:
                         "results": [],
                     }
                     continue
-                items = results if isinstance(results, list) else []
+                raw_items = results if isinstance(results, list) else []
+                items, filtered = _filter_retrievable_results(raw_items, enabled_document_ids)
                 retrieval_counts[source] += len(items)
+                filtered_counts[source] += filtered
                 for r in items:
                     r["source"] = source
                 all_results.extend(items)
                 subquery_detail["sources"][source] = {
                     "count": len(items),
+                    "filtered": filtered,
                     "results": _summarize_results(items),
                 }
             retrieval_details.append(subquery_detail)
 
         trace.add_step("retrieve", {
             "counts": retrieval_counts,
+            "filtered_counts": filtered_counts,
             "errors": retrieval_errors,
             "details": retrieval_details,
         })
 
         # --- Step 3: Fusion + rerank ---
-        yield {"type": "status", "data": {"status": "ranking", "detail": f"Fusing and re-ranking {len(all_results)} results"}}
+        yield {"type": "status", "data": {"status": "ranking", "detail": f"正在融合并重排 {len(all_results)} 条结果"}}
         await asyncio.sleep(0)
 
         ranked = await self.fusion.rank(query, all_results, limit=self.top_k)
@@ -192,10 +210,28 @@ class AgentOrchestrator:
             "input_count": len(all_results),
             "output_count": len(ranked),
             "results": _summarize_results(ranked),
+            "reranker": {
+                "enabled": self.settings.reranker_enabled,
+                "weights": {
+                    "original": self.settings.reranker_original_weight,
+                    "query": self.settings.reranker_query_weight,
+                    "phrase": self.settings.reranker_phrase_weight,
+                    "source": self.settings.reranker_source_weight,
+                },
+            },
         })
 
-        # --- Step 4: Citations ---
-        citations = [r for r in ranked if isinstance(r, dict)]
+        # --- Step 4: Evidence pruning + citations ---
+        citation_report = prune_citations_with_report(query, ranked)
+        citations = citation_report["selected"]
+        trace.add_step("cite", {
+            "input_count": len(ranked),
+            "output_count": len(citations),
+            "results": _summarize_results(citations),
+            "candidates": _summarize_results(citation_report["candidates"], limit=10),
+            "rejection_counts": citation_report["rejection_counts"],
+            "settings": citation_report["settings"],
+        })
         yield {"type": "citations", "data": citations}
         await asyncio.sleep(0)
 
@@ -203,16 +239,16 @@ class AgentOrchestrator:
         token_count = 0
         answer_buffer: list[str] = []
 
-        if ranked:
-            yield {"type": "status", "data": {"status": "generating", "detail": "Synthesizing answer from documents"}}
-            async for token in synthesize_answer(query, ranked, sub_queries, history):
+        if citations:
+            yield {"type": "status", "data": {"status": "generating", "detail": "正在基于文档生成回答"}}
+            async for token in synthesize_answer(query, citations, sub_queries, history):
                 token_count += 1
                 answer_buffer.append(token)
                 yield {"type": "chunk", "data": token}
         else:
             if self.mode == "kb":
                 message = "当前知识库未检索到足够依据，无法基于文档回答。你可以换个问法、补充文档，或切换到聊天模式。"
-                yield {"type": "status", "data": {"status": "blocked", "detail": "No grounded context found in knowledge base mode"}}
+                yield {"type": "status", "data": {"status": "blocked", "detail": "知识库模式下没有找到足够依据"}}
                 token_count = 1
                 answer_buffer.append(message)
                 yield {"type": "chunk", "data": message}
@@ -226,7 +262,7 @@ class AgentOrchestrator:
                 yield {"type": "trace", "data": trace.to_dict()}
                 return
 
-            yield {"type": "status", "data": {"status": "generating", "detail": "No documents found, answering from general knowledge"}}
+            yield {"type": "status", "data": {"status": "generating", "detail": "未找到文档依据，改用通用知识回答"}}
             async for token in direct_chat(query, history, with_fallback_note=True):
                 token_count += 1
                 answer_buffer.append(token)
@@ -248,7 +284,7 @@ class AgentOrchestrator:
         logger.info(
             f"Query '{query[:60]}' completed in {trace_dict['total_ms']:.0f}ms | "
             f"vector={retrieval_counts['vector']} graph={retrieval_counts['graph']} bm25={retrieval_counts['bm25']} | "
-            f"ranked={len(ranked)} tokens={token_count}"
+            f"ranked={len(ranked)} citations={len(citations)} tokens={token_count}"
         )
         yield {"type": "trace", "data": trace_dict}
 
@@ -291,7 +327,7 @@ def _summarize_results(results: list[dict], limit: int = 5) -> list[dict]:
         text = str(item.get("text", "")).replace("\n", " ")
         if len(text) > 220:
             text = text[:220] + "..."
-        summary.append({
+        row = {
             "id": item.get("id") or item.get("chunk_id") or "",
             "document_id": item.get("document_id", ""),
             "document_name": item.get("document_name", ""),
@@ -299,5 +335,41 @@ def _summarize_results(results: list[dict], limit: int = 5) -> list[dict]:
             "source": item.get("source", "unknown"),
             "score": float(item.get("score", 0) or 0),
             "text": text,
-        })
+        }
+        for key in (
+            "_citation_selected",
+            "_citation_reason",
+            "_citation_rejection_reason",
+            "_citation_relative_score",
+            "_citation_query_coverage",
+            "_rrf_score",
+            "_rerank_score",
+        ):
+            if key in item:
+                row[key.removeprefix("_")] = item[key]
+        if item.get("retrieval_sources"):
+            row["citation_sources"] = item["retrieval_sources"]
+        if item.get("_rerank_features"):
+            row["rerank_features"] = item["_rerank_features"]
+        if item.get("graph_context"):
+            row["graph_context"] = item["graph_context"]
+        summary.append(row)
     return summary
+
+
+def _filter_retrievable_results(
+    results: list[dict],
+    enabled_document_ids: set[str],
+) -> tuple[list[dict], int]:
+    if not enabled_document_ids:
+        return [], len(results)
+
+    filtered: list[dict] = []
+    removed = 0
+    for item in results:
+        document_id = str(item.get("document_id") or "")
+        if document_id in enabled_document_ids:
+            filtered.append(item)
+        else:
+            removed += 1
+    return filtered, removed

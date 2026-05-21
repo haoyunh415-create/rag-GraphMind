@@ -96,6 +96,33 @@ function Invoke-CheckedJson {
     }
 }
 
+function Wait-DocumentReady {
+    param([string]$DocumentId)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastStatus = "unknown"
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $document = Invoke-RestMethod -Method Get -Uri "$BackendUrl/api/documents/$DocumentId/status" -TimeoutSec 10
+            $lastStatus = [string]$document.status
+            if ($lastStatus -in @("ready", "partial", "duplicate")) {
+                return $document
+            }
+            if ($lastStatus -eq "error") {
+                throw "Document ingestion failed: $($document.errors -join '; ')"
+            }
+        } catch {
+            if ($_.Exception.Message -like "Document ingestion failed:*") {
+                throw
+            }
+            $lastStatus = $_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "Document ingestion did not become ready: $DocumentId. Last status: $lastStatus"
+}
+
 function Start-ServiceProcess {
     param(
         [string]$Name,
@@ -244,10 +271,13 @@ The recommended demo flow is upload a document, ask a grounded question, review 
         throw "curl upload failed with exit code $LASTEXITCODE"
     }
     $upload = $uploadRaw | ConvertFrom-Json
-    Assert-True ($upload.status -in @("ready", "partial", "duplicate")) "Upload returned unexpected status: $uploadRaw"
-    Assert-True ($upload.chunk_count -gt 0) "Upload did not produce chunks: $uploadRaw"
+    Assert-True ($upload.status -ne "error") "Upload returned error: $uploadRaw"
     $documentId = $upload.document_id
-    Write-Step "Upload OK: $documentId"
+    Write-Step "Upload accepted: $documentId"
+
+    $readyDocument = Wait-DocumentReady -DocumentId $documentId
+    Assert-True ($readyDocument.chunk_count -gt 0) "Upload did not produce chunks: $($readyDocument | ConvertTo-Json -Compress)"
+    Write-Step "Ingestion OK: $($readyDocument.status)"
 
     $documentsResponse = Invoke-CheckedJson -Name "knowledge documents" -Url "$BackendUrl/api/kb/documents"
     $documents = @($documentsResponse.documents)

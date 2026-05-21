@@ -51,6 +51,33 @@ function Invoke-CheckedJson {
     }
 }
 
+function Wait-DocumentReady {
+    param([string]$DocumentId)
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastStatus = "unknown"
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $document = Invoke-RestMethod -Method Get -Uri "$BackendUrl/api/documents/$DocumentId/status" -TimeoutSec $TimeoutSeconds
+            $lastStatus = [string]$document.status
+            if ($lastStatus -in @("ready", "partial", "duplicate")) {
+                return $document
+            }
+            if ($lastStatus -eq "error") {
+                throw "Document ingestion failed: $($document.errors -join '; ')"
+            }
+        } catch {
+            if ($_.Exception.Message -like "Document ingestion failed:*") {
+                throw
+            }
+            $lastStatus = $_.Exception.Message
+        }
+        Start-Sleep -Milliseconds 500
+    }
+
+    throw "Document ingestion did not become ready: $DocumentId. Last status: $lastStatus"
+}
+
 Write-Step "Checking backend health"
 $health = Invoke-CheckedJson -Name "backend health" -Url "$BackendUrl/api/health"
 if ($health.status -ne "ok") {
@@ -108,7 +135,13 @@ This temporary document verifies upload, indexing, listing, chunk preview, and d
         if (-not $documentId) {
             throw "Upload response did not include document_id: $uploadRaw"
         }
-        Write-Step "Upload OK: $documentId"
+        Write-Step "Upload accepted: $documentId"
+
+        $readyDocument = Wait-DocumentReady -DocumentId $documentId
+        if ($readyDocument.chunk_count -lt 1) {
+            throw "Uploaded document became $($readyDocument.status) but has no chunks"
+        }
+        Write-Step "Ingestion OK: $($readyDocument.status)"
 
         $chunksResponse = Invoke-CheckedJson -Name "uploaded document chunks" -Url "$BackendUrl/api/documents/$documentId/chunks"
         if (@($chunksResponse.chunks).Count -lt 1) {

@@ -137,6 +137,8 @@ $requiredKeys = @(
     "EMBEDDING_MODEL",
     "LLM_BASE_URL",
     "NEXT_PUBLIC_API_URL",
+    "API_AUTH_TOKEN",
+    "NEXT_PUBLIC_API_AUTH_TOKEN",
     "CORS_ORIGINS",
     "MAX_UPLOAD_BYTES"
 )
@@ -178,6 +180,13 @@ if ($envMap.ContainsKey("DEBUG") -and $Production -and $envMap["DEBUG"].ToLowerI
 
 if ($envMap.ContainsKey("CORS_ORIGINS") -and $Production -and $envMap["CORS_ORIGINS"] -match "127\.0\.0\.1|localhost") {
     Add-Warning "CORS_ORIGINS still points at localhost. Set it to the public frontend origin before public deployment."
+}
+
+if ($envMap.ContainsKey("API_AUTH_TOKEN") -and $envMap.ContainsKey("NEXT_PUBLIC_API_AUTH_TOKEN")) {
+    if ($envMap["API_AUTH_TOKEN"] -and $envMap["NEXT_PUBLIC_API_AUTH_TOKEN"] -and
+        $envMap["API_AUTH_TOKEN"] -ne $envMap["NEXT_PUBLIC_API_AUTH_TOKEN"]) {
+        Add-Failure "API_AUTH_TOKEN and NEXT_PUBLIC_API_AUTH_TOKEN must match when API auth is enabled."
+    }
 }
 
 Write-Step "Checking common ports"

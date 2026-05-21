@@ -33,38 +33,57 @@ class EvaluationStore:
         def _save() -> None:
             with self._connect() as conn:
                 self._ensure_table(conn)
+                columns = [
+                    "evaluation_id",
+                    "query_id",
+                    "conversation_id",
+                    "query",
+                    "answer",
+                    "overall_score",
+                    "label",
+                    "metrics_json",
+                    "issues_json",
+                    "contexts_json",
+                    "trace_json",
+                    "created_at",
+                ]
+                values: list[Any] = [
+                    result.evaluation_id,
+                    result.query_id,
+                    result.conversation_id,
+                    result.query,
+                    result.answer,
+                    result.overall_score,
+                    result.label,
+                    json.dumps(payload, ensure_ascii=False),
+                    json.dumps(result.issues, ensure_ascii=False),
+                    json.dumps(contexts_payload, ensure_ascii=False),
+                    json.dumps(trace_payload, ensure_ascii=False),
+                    result.created_at,
+                ]
+                existing_columns = self._column_names(conn)
+                legacy_values = {
+                    "expected_answer": "",
+                    "faithfulness": result.faithfulness,
+                    "answer_relevancy": result.answer_relevancy,
+                    "context_recall": result.context_recall,
+                    "context_precision": result.context_precision,
+                    "latency_ms": result.latency_ms,
+                }
+                for column, value in legacy_values.items():
+                    if column in existing_columns and column not in columns:
+                        columns.append(column)
+                        values.append(value)
+
+                placeholders = ", ".join("?" for _ in columns)
                 conn.execute(
-                    """
+                    f"""
                     INSERT OR REPLACE INTO rag_evaluations (
-                        evaluation_id,
-                        query_id,
-                        conversation_id,
-                        query,
-                        answer,
-                        overall_score,
-                        label,
-                        metrics_json,
-                        issues_json,
-                        contexts_json,
-                        trace_json,
-                        created_at
+                        {", ".join(columns)}
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES ({placeholders})
                     """,
-                    (
-                        result.evaluation_id,
-                        result.query_id,
-                        result.conversation_id,
-                        result.query,
-                        result.answer,
-                        result.overall_score,
-                        result.label,
-                        json.dumps(payload, ensure_ascii=False),
-                        json.dumps(result.issues, ensure_ascii=False),
-                        json.dumps(contexts_payload, ensure_ascii=False),
-                        json.dumps(trace_payload, ensure_ascii=False),
-                        result.created_at,
-                    ),
+                    tuple(values),
                 )
                 conn.commit()
 
@@ -105,6 +124,13 @@ class EvaluationStore:
         return sqlite3.connect(self.db_path)
 
     @staticmethod
+    def _column_names(conn: sqlite3.Connection) -> set[str]:
+        return {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(rag_evaluations)").fetchall()
+        }
+
+    @staticmethod
     def _ensure_table(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
@@ -122,6 +148,31 @@ class EvaluationStore:
                 trace_json TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
             )
+            """
+        )
+        existing_columns = EvaluationStore._column_names(conn)
+        required_columns = {
+            "evaluation_id": "TEXT",
+            "query_id": "TEXT",
+            "conversation_id": "TEXT",
+            "query": "TEXT NOT NULL DEFAULT ''",
+            "answer": "TEXT NOT NULL DEFAULT ''",
+            "overall_score": "REAL NOT NULL DEFAULT 0",
+            "label": "TEXT NOT NULL DEFAULT 'fail'",
+            "metrics_json": "TEXT NOT NULL DEFAULT '{}'",
+            "issues_json": "TEXT NOT NULL DEFAULT '[]'",
+            "contexts_json": "TEXT NOT NULL DEFAULT '[]'",
+            "trace_json": "TEXT NOT NULL DEFAULT '{}'",
+            "created_at": "TEXT NOT NULL DEFAULT ''",
+        }
+        for column, definition in required_columns.items():
+            if column not in existing_columns:
+                conn.execute(f"ALTER TABLE rag_evaluations ADD COLUMN {column} {definition}")
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_evaluations_evaluation_id
+            ON rag_evaluations(evaluation_id)
+            WHERE evaluation_id IS NOT NULL
             """
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_rag_evaluations_query_id ON rag_evaluations(query_id)")
@@ -152,4 +203,3 @@ def _summarize_contexts(contexts: list[dict[str, Any]], limit: int = 10) -> list
             "text": text,
         })
     return summary
-

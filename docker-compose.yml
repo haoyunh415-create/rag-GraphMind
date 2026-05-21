@@ -20,7 +20,11 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
       MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
       REDIS_URL: redis://redis:6379/0
+      INGESTION_QUEUE_MODE: redis
+      INGESTION_DLQ_NAME: rag:ingestion:queue:dead
+      INGESTION_QUEUE_DIR: /app/data/ingestion-uploads
       CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS in .env}
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
@@ -41,18 +45,58 @@ services:
       redis:
         condition: service_healthy
 
+  ingestion-worker:
+    build: ./backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.ingestion.worker"]
+    env_file:
+      - .env
+    volumes:
+      - api_data:/app/data
+    environment:
+      DEBUG: "false"
+      MILVUS_HOST: milvus
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in .env}
+      ES_HOST: http://elasticsearch:9200
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?Set MINIO_ACCESS_KEY in .env}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?Set MINIO_SECRET_KEY in .env}
+      REDIS_URL: redis://redis:6379/0
+      INGESTION_QUEUE_MODE: redis
+      INGESTION_DLQ_NAME: rag:ingestion:queue:dead
+      INGESTION_QUEUE_DIR: /app/data/ingestion-uploads
+      CORS_ORIGINS: ${CORS_ORIGINS:?Set CORS_ORIGINS in .env}
+      API_AUTH_TOKEN: ${API_AUTH_TOKEN:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in .env}
+      OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-text-embedding-3-small}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.openai.com/v1}
+    depends_on:
+      milvus:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
   # -- Frontend --
   web:
     build:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL in .env}
+        NEXT_PUBLIC_API_AUTH_TOKEN: ${NEXT_PUBLIC_API_AUTH_TOKEN:-}
     restart: unless-stopped
     ports:
       - "3000:3000"
     environment:
       NODE_ENV: production
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:?Set NEXT_PUBLIC_API_URL in .env}
+      NEXT_PUBLIC_API_AUTH_TOKEN: ${NEXT_PUBLIC_API_AUTH_TOKEN:-}
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 15s

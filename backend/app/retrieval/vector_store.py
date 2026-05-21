@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,10 @@ _embedding_model: Any = None  # lazy-loaded SentenceTransformer
 _use_tfidf_fallback = False  # set to True when sentence-transformers can't load
 _tfidf_vectorizer: Any = None
 _tfidf_fitted = False
+DOCUMENT_LIFECYCLE_STATUSES = {"enabled", "disabled", "test", "archived"}
+DEFAULT_DOCUMENT_LIFECYCLE_STATUS = "enabled"
+DOCUMENT_INGESTION_STATUSES = {"queued", "processing", "ready", "partial", "error", "duplicate", "cancelled"}
+ACTIVE_DOCUMENT_STATUSES = {"queued", "processing"}
 
 
 class VectorStore:
@@ -195,7 +200,10 @@ class VectorStore:
         try:
             row = self._sqlite_conn.execute(
                 """
-                SELECT document_id, document_name, chunk_count, index_statuses, errors
+                SELECT
+                    document_id, document_name, chunk_count, index_statuses, errors,
+                    lifecycle_status, status, job_id, attempt_count, max_attempts,
+                    last_error, updated_at
                 FROM rag_documents
                 WHERE content_hash = ?
                 """,
@@ -212,6 +220,13 @@ class VectorStore:
             "content_hash": content_hash,
             "index_statuses": _json_dict(row[3]) if len(row) > 3 else {},
             "errors": _json_list(row[4]) if len(row) > 4 else [],
+            "lifecycle_status": _normalize_lifecycle_status(row[5] if len(row) > 5 else None),
+            "status": _normalize_ingestion_status(row[6] if len(row) > 6 else None, _json_dict(row[3]) if len(row) > 3 else {}),
+            "job_id": str(row[7] or "") if len(row) > 7 else "",
+            "attempt_count": int(row[8] or 0) if len(row) > 8 else 0,
+            "max_attempts": int(row[9] or 0) if len(row) > 9 else 0,
+            "last_error": str(row[10] or "") if len(row) > 10 else "",
+            "updated_at": str(row[11] or "") if len(row) > 11 else "",
         }
 
     def find_document_by_chunk_texts(self, chunk_texts: list[str]) -> dict[str, Any] | None:
@@ -270,16 +285,31 @@ class VectorStore:
         chunk_count: int,
         index_statuses: dict[str, str] | None = None,
         errors: list[str] | None = None,
+        lifecycle_status: str | None = None,
+        status: str | None = None,
+        job_id: str | None = None,
+        attempt_count: int | None = None,
+        max_attempts: int | None = None,
+        last_error: str | None = None,
+        file_path: str | None = None,
     ) -> None:
         if not self._sqlite_conn:
             return
         try:
             self._ensure_document_registry_table()
+            task_meta = self._get_document_task_metadata(document_id)
+            lifecycle_status = _normalize_lifecycle_status(
+                lifecycle_status or self._get_document_lifecycle_status(document_id)
+            )
             self._sqlite_conn.execute(
                 """
                 INSERT OR REPLACE INTO rag_documents
-                    (content_hash, document_id, document_name, chunk_count, index_statuses, errors)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (
+                        content_hash, document_id, document_name, chunk_count,
+                        index_statuses, errors, lifecycle_status, status, job_id,
+                        attempt_count, max_attempts, last_error, file_path, updated_at
+                    )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     content_hash,
@@ -288,11 +318,284 @@ class VectorStore:
                     chunk_count,
                     json.dumps(index_statuses or {"vector": "ready", "bm25": "unknown", "graph": "unknown"}),
                     json.dumps(errors or []),
+                    lifecycle_status,
+                    _normalize_ingestion_status(status, index_statuses or {}),
+                    job_id or self._get_document_job_id(document_id) or "",
+                    int(attempt_count if attempt_count is not None else task_meta.get("attempt_count", 0)),
+                    int(max_attempts if max_attempts is not None else task_meta.get("max_attempts", 0)),
+                    str(last_error if last_error is not None else task_meta.get("last_error", "")),
+                    str(file_path if file_path is not None else task_meta.get("file_path", "")),
+                    _utc_now_iso(),
                 ),
             )
             self._sqlite_conn.commit()
         except Exception as e:
             logger.warning(f"Document dedupe registry update failed: {e}")
+
+    def update_document_lifecycle_status(self, document_id: str, lifecycle_status: str) -> bool:
+        if not self._sqlite_conn:
+            return False
+        lifecycle_status = _normalize_lifecycle_status(lifecycle_status)
+        try:
+            self._ensure_document_registry_table()
+            cursor = self._sqlite_conn.execute(
+                """
+                UPDATE rag_documents
+                SET lifecycle_status = ?
+                WHERE document_id = ?
+                """,
+                (lifecycle_status, document_id),
+            )
+            self._sqlite_conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.warning(f"Document lifecycle status update failed: {e}")
+            return False
+
+    def cancel_document_ingestion(self, document_id: str) -> bool:
+        return self._update_document_ingestion_state(
+            document_id,
+            status="cancelled",
+            index_statuses={"ingestion": "cancelled", "vector": "skipped", "bm25": "skipped", "graph": "skipped"},
+            errors=[],
+            last_error="",
+        )
+
+    def mark_document_ingestion_processing(
+        self,
+        document_id: str,
+        attempt_count: int,
+        max_attempts: int,
+        file_path: str,
+    ) -> bool:
+        return self._update_document_ingestion_state(
+            document_id,
+            status="processing",
+            index_statuses={"ingestion": "processing", "vector": "queued", "bm25": "queued", "graph": "queued"},
+            errors=[],
+            attempt_count=attempt_count,
+            max_attempts=max_attempts,
+            file_path=file_path,
+            last_error="",
+        )
+
+    def mark_document_ingestion_retrying(
+        self,
+        document_id: str,
+        attempt_count: int,
+        max_attempts: int,
+        last_error: str,
+    ) -> bool:
+        return self._update_document_ingestion_state(
+            document_id,
+            status="queued",
+            index_statuses={"ingestion": "queued", "vector": "queued", "bm25": "queued", "graph": "queued"},
+            errors=[last_error] if last_error else [],
+            attempt_count=attempt_count,
+            max_attempts=max_attempts,
+            last_error=last_error,
+        )
+
+    def mark_document_ingestion_failed(
+        self,
+        document_id: str,
+        errors: list[str],
+        attempt_count: int | None = None,
+        max_attempts: int | None = None,
+        last_error: str | None = None,
+    ) -> bool:
+        return self._update_document_ingestion_state(
+            document_id,
+            status="error",
+            index_statuses={"ingestion": "error", "vector": "error", "bm25": "skipped", "graph": "skipped"},
+            errors=errors,
+            attempt_count=attempt_count,
+            max_attempts=max_attempts,
+            last_error=last_error if last_error is not None else (errors[-1] if errors else ""),
+        )
+
+    def reset_document_ingestion_for_retry(
+        self,
+        document_id: str,
+        job_id: str,
+        max_attempts: int,
+    ) -> bool:
+        return self._update_document_ingestion_state(
+            document_id,
+            status="queued",
+            index_statuses={"ingestion": "queued", "vector": "queued", "bm25": "queued", "graph": "queued"},
+            errors=[],
+            job_id=job_id,
+            attempt_count=0,
+            max_attempts=max_attempts,
+            last_error="",
+        )
+
+    def _update_document_ingestion_state(
+        self,
+        document_id: str,
+        status: str,
+        index_statuses: dict[str, str],
+        errors: list[str],
+        job_id: str | None = None,
+        attempt_count: int | None = None,
+        max_attempts: int | None = None,
+        last_error: str | None = None,
+        file_path: str | None = None,
+    ) -> bool:
+        if not self._sqlite_conn:
+            return False
+        try:
+            self._ensure_document_registry_table()
+            fields = [
+                "status = ?",
+                "index_statuses = ?",
+                "errors = ?",
+                "updated_at = ?",
+            ]
+            values: list[Any] = [
+                _normalize_ingestion_status(status, index_statuses),
+                json.dumps(index_statuses),
+                json.dumps(errors),
+                _utc_now_iso(),
+            ]
+            if job_id is not None:
+                fields.append("job_id = ?")
+                values.append(job_id)
+            if attempt_count is not None:
+                fields.append("attempt_count = ?")
+                values.append(int(attempt_count))
+            if max_attempts is not None:
+                fields.append("max_attempts = ?")
+                values.append(int(max_attempts))
+            if last_error is not None:
+                fields.append("last_error = ?")
+                values.append(last_error)
+            if file_path is not None:
+                fields.append("file_path = ?")
+                values.append(file_path)
+            values.append(document_id)
+            cursor = self._sqlite_conn.execute(
+                f"UPDATE rag_documents SET {', '.join(fields)} WHERE document_id = ?",
+                values,
+            )
+            self._sqlite_conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.warning(f"Document ingestion state update failed: {e}")
+            return False
+
+    def get_document_ingestion_record(self, document_id: str) -> dict[str, Any] | None:
+        if not self._sqlite_conn:
+            return None
+        try:
+            self._ensure_document_registry_table()
+            row = self._sqlite_conn.execute(
+                """
+                SELECT
+                    document_id, document_name, content_hash, chunk_count,
+                    index_statuses, errors, lifecycle_status, status, job_id,
+                    attempt_count, max_attempts, last_error, file_path, updated_at
+                FROM rag_documents
+                WHERE document_id = ?
+                LIMIT 1
+                """,
+                (document_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        return {
+            "document_id": row[0],
+            "document_name": row[1],
+            "content_hash": row[2],
+            "chunk_count": int(row[3] or 0),
+            "index_statuses": _json_dict(row[4]),
+            "errors": _json_list(row[5]),
+            "lifecycle_status": _normalize_lifecycle_status(row[6]),
+            "status": _normalize_ingestion_status(row[7], _json_dict(row[4])),
+            "job_id": str(row[8] or ""),
+            "attempt_count": int(row[9] or 0),
+            "max_attempts": int(row[10] or 0),
+            "last_error": str(row[11] or ""),
+            "file_path": str(row[12] or ""),
+            "updated_at": str(row[13] or ""),
+        }
+
+    def _get_document_lifecycle_status(self, document_id: str) -> str | None:
+        if not self._sqlite_conn:
+            return None
+        try:
+            self._ensure_document_registry_table()
+            row = self._sqlite_conn.execute(
+                """
+                SELECT lifecycle_status
+                FROM rag_documents
+                WHERE document_id = ?
+                LIMIT 1
+                """,
+                (document_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        return _normalize_lifecycle_status(row[0])
+
+    def _get_document_job_id(self, document_id: str) -> str | None:
+        if not self._sqlite_conn:
+            return None
+        try:
+            self._ensure_document_registry_table()
+            row = self._sqlite_conn.execute(
+                """
+                SELECT job_id
+                FROM rag_documents
+                WHERE document_id = ?
+                LIMIT 1
+                """,
+                (document_id,),
+            ).fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        return str(row[0] or "") or None
+
+    def _get_document_task_metadata(self, document_id: str) -> dict[str, Any]:
+        if not self._sqlite_conn:
+            return {}
+        try:
+            self._ensure_document_registry_table()
+            row = self._sqlite_conn.execute(
+                """
+                SELECT attempt_count, max_attempts, last_error, file_path, updated_at
+                FROM rag_documents
+                WHERE document_id = ?
+                LIMIT 1
+                """,
+                (document_id,),
+            ).fetchone()
+        except Exception:
+            return {}
+        if not row:
+            return {}
+        return {
+            "attempt_count": int(row[0] or 0),
+            "max_attempts": int(row[1] or 0),
+            "last_error": str(row[2] or ""),
+            "file_path": str(row[3] or ""),
+            "updated_at": str(row[4] or ""),
+        }
+
+    async def list_retrievable_document_ids(self) -> set[str]:
+        documents = await self.list_documents()
+        return {
+            str(doc.get("document_id") or "")
+            for doc in documents
+            if doc.get("document_id") and doc.get("is_retrievable")
+        }
 
     # ------------------------------------------------------------------
     # SQLite-vec (local persistent vector store)
@@ -515,13 +818,29 @@ class VectorStore:
                 document_name TEXT NOT NULL,
                 chunk_count INTEGER NOT NULL DEFAULT 0,
                 index_statuses TEXT NOT NULL DEFAULT '{}',
-                errors TEXT NOT NULL DEFAULT '[]'
+                errors TEXT NOT NULL DEFAULT '[]',
+                lifecycle_status TEXT NOT NULL DEFAULT 'enabled',
+                status TEXT NOT NULL DEFAULT 'ready',
+                job_id TEXT NOT NULL DEFAULT '',
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                max_attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                file_path TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
             )
             """
         )
         for column, definition in (
             ("index_statuses", "TEXT NOT NULL DEFAULT '{}'"),
             ("errors", "TEXT NOT NULL DEFAULT '[]'"),
+            ("lifecycle_status", "TEXT NOT NULL DEFAULT 'enabled'"),
+            ("status", "TEXT NOT NULL DEFAULT 'ready'"),
+            ("job_id", "TEXT NOT NULL DEFAULT ''"),
+            ("attempt_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("max_attempts", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_error", "TEXT NOT NULL DEFAULT ''"),
+            ("file_path", "TEXT NOT NULL DEFAULT ''"),
+            ("updated_at", "TEXT NOT NULL DEFAULT ''"),
         ):
             try:
                 self._sqlite_conn.execute(f"ALTER TABLE rag_documents ADD COLUMN {column} {definition}")
@@ -533,13 +852,16 @@ class VectorStore:
         self._sqlite_conn.commit()
 
     def _merge_document_registry(self, documents: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        if not documents or not self._sqlite_conn:
+        if not self._sqlite_conn:
             return documents
 
         try:
             rows = self._sqlite_conn.execute(
                 """
-                SELECT document_id, index_statuses, errors
+                SELECT
+                    document_id, document_name, chunk_count, index_statuses, errors,
+                    lifecycle_status, status, job_id, attempt_count, max_attempts,
+                    last_error, updated_at
                 FROM rag_documents
                 """
             ).fetchall()
@@ -548,33 +870,79 @@ class VectorStore:
 
         registry = {
             row[0]: {
-                "index_statuses": _json_dict(row[1]),
-                "errors": _json_list(row[2]),
+                "document_name": row[1] or "unknown",
+                "chunk_count": int(row[2] or 0),
+                "index_statuses": _json_dict(row[3]),
+                "errors": _json_list(row[4]),
+                "lifecycle_status": _normalize_lifecycle_status(row[5] if len(row) > 5 else None),
+                "status": _normalize_ingestion_status(row[6] if len(row) > 6 else None, _json_dict(row[3])),
+                "job_id": str(row[7] or "") if len(row) > 7 else "",
+                "attempt_count": int(row[8] or 0) if len(row) > 8 else 0,
+                "max_attempts": int(row[9] or 0) if len(row) > 9 else 0,
+                "last_error": str(row[10] or "") if len(row) > 10 else "",
+                "updated_at": str(row[11] or "") if len(row) > 11 else "",
             }
             for row in rows
         }
+        seen_document_ids = {doc.get("document_id") for doc in documents}
 
         for doc in documents:
             meta = registry.get(doc["document_id"])
             if meta:
+                doc["document_name"] = doc.get("document_name") or meta["document_name"]
+                doc["chunk_count"] = max(int(doc.get("chunk_count") or 0), meta["chunk_count"])
                 doc["index_statuses"] = meta["index_statuses"] or {
                     "vector": "ready",
                     "bm25": "unknown",
                     "graph": "unknown",
                 }
                 doc["errors"] = meta["errors"]
+                doc["lifecycle_status"] = meta["lifecycle_status"]
+                doc["status"] = meta["status"]
+                doc["job_id"] = meta["job_id"]
+                doc["attempt_count"] = meta["attempt_count"]
+                doc["max_attempts"] = meta["max_attempts"]
+                doc["last_error"] = meta["last_error"]
+                doc["updated_at"] = meta["updated_at"]
             else:
                 doc["index_statuses"] = {"vector": "ready", "bm25": "unknown", "graph": "unknown"}
                 doc["errors"] = []
-            statuses = doc["index_statuses"]
-            if statuses.get("vector") == "ready" and not any(value == "error" for value in statuses.values()):
-                doc["status"] = "ready"
-            elif any(value == "ready" for value in statuses.values()):
-                doc["status"] = "partial"
-            else:
-                doc["status"] = "error"
+                doc["lifecycle_status"] = DEFAULT_DOCUMENT_LIFECYCLE_STATUS
+                doc["job_id"] = ""
+                doc["status"] = _derive_document_status(doc["index_statuses"])
+                doc["attempt_count"] = 0
+                doc["max_attempts"] = 0
+                doc["last_error"] = ""
+                doc["updated_at"] = ""
+            doc["is_retrievable"] = (
+                doc["lifecycle_status"] == "enabled"
+                and doc["status"] not in ACTIVE_DOCUMENT_STATUSES
+                and doc["status"] not in {"error", "cancelled"}
+            )
 
-        return documents
+        for document_id, meta in registry.items():
+            if document_id in seen_document_ids:
+                continue
+            documents.append({
+                "document_id": document_id,
+                "document_name": meta["document_name"],
+                "chunk_count": meta["chunk_count"],
+                "status": meta["status"],
+                "job_id": meta["job_id"],
+                "attempt_count": meta["attempt_count"],
+                "max_attempts": meta["max_attempts"],
+                "last_error": meta["last_error"],
+                "updated_at": meta["updated_at"],
+                "lifecycle_status": meta["lifecycle_status"],
+                "is_retrievable": False,
+                "index_statuses": meta["index_statuses"],
+                "errors": meta["errors"],
+            })
+
+        return sorted(
+            documents,
+            key=lambda doc: (str(doc.get("document_name", "")).lower(), str(doc.get("document_id", ""))),
+        )
 
     async def _count_plain_sqlite(self) -> int:
         loop = asyncio.get_running_loop()
@@ -1005,6 +1373,8 @@ def _documents_from_chunk_rows(rows: list[tuple]) -> list[dict[str, Any]]:
             "document_name": item["document_name"],
             "chunk_count": len(ordered_texts),
             "status": "ready",
+            "lifecycle_status": DEFAULT_DOCUMENT_LIFECYCLE_STATUS,
+            "is_retrievable": True,
             "index_statuses": {"vector": "ready", "bm25": "unknown", "graph": "unknown"},
             "errors": [],
         })
@@ -1041,6 +1411,47 @@ def _json_list(value: Any) -> list[str]:
     if not isinstance(parsed, list):
         return []
     return [str(item) for item in parsed]
+
+
+def _normalize_lifecycle_status(value: Any) -> str:
+    status = str(value or DEFAULT_DOCUMENT_LIFECYCLE_STATUS).strip().lower()
+    if status not in DOCUMENT_LIFECYCLE_STATUSES:
+        return DEFAULT_DOCUMENT_LIFECYCLE_STATUS
+    return status
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _normalize_ingestion_status(value: Any, index_statuses: dict[str, str] | None = None) -> str:
+    status = str(value or "").strip().lower()
+    if status in DOCUMENT_INGESTION_STATUSES:
+        return status
+    return _derive_document_status(index_statuses or {})
+
+
+def _derive_document_status(index_statuses: dict[str, str]) -> str:
+    statuses = {str(k): str(v) for k, v in (index_statuses or {}).items()}
+    if statuses.get("ingestion") in ACTIVE_DOCUMENT_STATUSES:
+        return statuses["ingestion"]
+    if statuses.get("ingestion") == "cancelled":
+        return "cancelled"
+    if statuses.get("ingestion") == "error":
+        return "error"
+    if statuses.get("dedupe") == "duplicate":
+        return "duplicate"
+    if statuses.get("vector") == "ready" and not any(value == "error" for value in statuses.values()):
+        return "ready"
+    if any(value == "ready" for value in statuses.values()):
+        return "partial"
+    if any(value == "error" for value in statuses.values()):
+        return "error"
+    if any(value == "processing" for value in statuses.values()):
+        return "processing"
+    if any(value == "queued" for value in statuses.values()):
+        return "queued"
+    return "ready"
 
 
 def _load_transformer_model():
