@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "description": "Deterministic RAG golden set for retrieval, citation, refusal, and latency evaluation.",
+  "documents": [
+    {
+      "id": "returns",
+      "filename": "golden-returns.txt",
+      "text": "Return policy. Food, custom goods, virtual goods, and opened personal-care items do not support seven-day no-reason returns. Normal goods support seven-day no-reason returns after delivery."
+    },
+    {
+      "id": "invoice",
+      "filename": "golden-invoice.txt",
+      "text": "Invoice process. Users can request an electronic invoice within 30 days after order completion. Electronic invoices are usually sent to the mailbox within 24 hours."
+    },
+    {
+      "id": "metrics",
+      "filename": "golden-metrics.txt",
+      "text": "Operations metrics. The platform should track issue hit rate, answer adoption rate, human handoff rate, average response time, and customer satisfaction."
+    },
+    {
+      "id": "support",
+      "filename": "golden-support.txt",
+      "text": "Support escalation. If the self-service bot fails to solve the same user question twice, the system should create a support ticket, attach the conversation context, and hand the case to a human agent."
+    },
+    {
+      "id": "shipping",
+      "filename": "golden-shipping.txt",
+      "text": "Shipping tracking. Users can view shipment location after the carrier scans the parcel. If tracking is not updated for 48 hours, customer service should contact the carrier and notify the user."
+    },
+    {
+      "id": "distractor",
+      "filename": "golden-distractor.txt",
+      "text": "Distractor document. Food packaging, invoice title, and response time may appear together here, but this document does not provide complete return, invoice, support, shipping, or operations rules."
+    }
+  ],
+  "cases": [
+    {
+      "id": "return-food",
+      "query": "Do food items support seven-day no-reason returns?",
+      "expected_document_id": "returns",
+      "expected_terms": ["food", "do not support", "seven-day"],
+      "difficulty": "simple"
+    },
+    {
+      "id": "return-synonym",
+      "query": "Can opened personal-care items be returned without reason within seven days?",
+      "expected_document_id": "returns",
+      "expected_terms": ["opened personal-care", "do not support", "seven-day"],
+      "difficulty": "paraphrase"
+    },
+    {
+      "id": "invoice-time",
+      "query": "How soon are electronic invoices usually sent?",
+      "expected_document_id": "invoice",
+      "expected_terms": ["electronic invoice", "24 hours", "mailbox"],
+      "difficulty": "simple"
+    },
+    {
+      "id": "quality-metrics",
+      "query": "Which operations metrics should the platform track?",
+      "expected_document_id": "metrics",
+      "expected_terms": ["hit rate", "adoption rate", "handoff"],
+      "difficulty": "list"
+    },
+    {
+      "id": "distractor-resistance",
+      "query": "Food packaging appears in one note, but what is the actual rule for food returns?",
+      "expected_document_id": "returns",
+      "expected_terms": ["food", "do not support", "returns"],
+      "difficulty": "distractor"
+    },
+    {
+      "id": "handoff-next-step",
+      "query": "If the bot fails to solve the same user question twice, what should happen next?",
+      "expected_document_id": "support",
+      "expected_terms": ["support ticket", "conversation context", "human agent"],
+      "difficulty": "workflow"
+    },
+    {
+      "id": "tracking-stale",
+      "query": "What should customer service do when parcel tracking is not updated for 48 hours?",
+      "expected_document_id": "shipping",
+      "expected_terms": ["48 hours", "contact the carrier", "notify the user"],
+      "difficulty": "workflow"
+    },
+    {
+      "id": "unknown-vip-discount",
+      "query": "What is the VIP discount rate for platinum members?",
+      "expected_document_id": null,
+      "expected_terms": [],
+      "expected_no_answer": true,
+      "difficulty": "negative"
+    }
+  ]
+}
