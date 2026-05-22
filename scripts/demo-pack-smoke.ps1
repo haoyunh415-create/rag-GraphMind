@@ -189,9 +189,9 @@ try {
 
     Write-Step "Uploading demo documents"
     $docPaths = @(
-        Join-Path $DocsDir "01-commerce-policy.md",
-        Join-Path $DocsDir "02-support-operations.md",
-        Join-Path $DocsDir "03-graph-relations.md"
+        (Join-Path $DocsDir "01-commerce-policy.md"),
+        (Join-Path $DocsDir "02-support-operations.md"),
+        (Join-Path $DocsDir "03-graph-relations.md")
     )
     foreach ($path in $docPaths) {
         Assert-True (Test-Path -LiteralPath $path) "Demo document not found: $path"

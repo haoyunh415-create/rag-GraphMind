@@ -48,6 +48,20 @@ flowchart LR
 .\scripts\demo-pack-smoke.ps1
 ```
 
+## Latest Verified Flow
+
+Last checked: 2026-05-22 19:32 Asia/Shanghai.
+
+- Demo Pack smoke: passed with `.\scripts\demo-pack-smoke.ps1 -KeepDocuments`.
+- Demo documents uploaded: 3/3.
+- Demo questions checked: 3/3 (`food-returns`, `bot-handoff`, `incident-dependency`).
+- Citations returned: yes, 1 citation per checked question.
+- Trace returned: yes, 9 trace steps per checked question.
+- Report path: `.e2e-data/demo-pack-smoke-report.json`.
+- Compose config: `docker compose config --quiet` passed.
+- Docker runtime startup: blocked in this desktop session because Docker Desktop Service was stopped and could not be started from the current permissions; rerun `docker compose up --build` after Docker Desktop is running.
+- GitHub Actions status: pending manual confirmation on GitHub; unauthenticated API lookup was rate-limited and GitHub CLI is not installed locally.
+
 ## 面试讲法
 
 - 不是简单套壳调用 LLM：项目覆盖了文档入库、检索、重排、引用、评估、Trace 和运营状态。
