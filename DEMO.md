@@ -50,7 +50,7 @@ flowchart LR
 
 ## Latest Verified Flow
 
-Last checked: 2026-05-23 15:52 Asia/Shanghai.
+Last checked: 2026-05-23 16:04 Asia/Shanghai.
 
 - Demo Pack smoke: passed with `.\scripts\demo-pack-smoke.ps1 -KeepDocuments`.
 - Demo documents uploaded: 3/3.
@@ -60,7 +60,7 @@ Last checked: 2026-05-23 15:52 Asia/Shanghai.
 - Report path: `.e2e-data/demo-pack-smoke-report.json`.
 - Compose config: `docker compose config --quiet` passed.
 - Docker runtime startup: passed with `docker compose up --build -d`; API, web, Redis, Elasticsearch, Milvus, MinIO, Neo4j, and ingestion worker started, with exposed API health returning `{"status":"ok","version":"0.1.0"}` and web returning HTTP 200.
-- GitHub Actions status: pending manual confirmation on GitHub; unauthenticated API lookup is still rate-limited and GitHub CLI is not installed locally.
+- GitHub Actions status: success confirmed on GitHub for CI run #3 (`19deae9`), with Backend tests, Frontend checks, and Docker Compose config all green.
 
 ## 面试讲法
 
