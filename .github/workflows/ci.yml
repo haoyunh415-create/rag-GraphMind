@@ -71,4 +71,19 @@ jobs:
           NEO4J_PASSWORD: ci-neo4j-password
           MINIO_ACCESS_KEY: ci-minio-access-key
           MINIO_SECRET_KEY: ci-minio-secret-key
-        run: docker compose config --quiet
+        run: |
+          cat > .env <<EOF
+          CORS_ORIGINS=${CORS_ORIGINS}
+          API_AUTH_TOKEN=${API_AUTH_TOKEN}
+          NEXT_PUBLIC_API_AUTH_TOKEN=${NEXT_PUBLIC_API_AUTH_TOKEN}
+          NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+          OPENAI_API_KEY=${OPENAI_API_KEY}
+          OPENAI_MODEL=${OPENAI_MODEL}
+          EMBEDDING_MODEL=${EMBEDDING_MODEL}
+          LLM_BASE_URL=${LLM_BASE_URL}
+          NEO4J_USER=${NEO4J_USER}
+          NEO4J_PASSWORD=${NEO4J_PASSWORD}
+          MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY}
+          MINIO_SECRET_KEY=${MINIO_SECRET_KEY}
+          EOF
+          docker compose config --quiet

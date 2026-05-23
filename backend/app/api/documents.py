@@ -218,6 +218,15 @@ async def get_ingestion_dead_letter(limit: int = 20):
 @router.get("/{document_id}/status")
 async def get_document_status(document_id: str):
     vs = VectorStore()
+    record = vs.get_document_ingestion_record(document_id)
+    if record:
+        return {
+            **record,
+            "is_retrievable": (
+                record.get("lifecycle_status") == "enabled"
+                and record.get("status") not in {"queued", "processing", "error", "cancelled"}
+            ),
+        }
     documents = await vs.list_documents()
     for doc in documents:
         if doc.get("document_id") == document_id:
@@ -260,8 +269,7 @@ async def update_document_status(document_id: str, request: DocumentStatusUpdate
 @router.post("/{document_id}/cancel")
 async def cancel_document_ingestion_endpoint(document_id: str):
     vs = VectorStore()
-    documents = await vs.list_documents()
-    document = next((doc for doc in documents if doc.get("document_id") == document_id), None)
+    document = vs.get_document_ingestion_record(document_id)
     if not document:
         raise HTTPException(
             status_code=http_status.HTTP_404_NOT_FOUND,
