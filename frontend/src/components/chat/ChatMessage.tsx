@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { Bot, ChevronDown, FileText, Quote, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -45,7 +45,7 @@ function InlineMarkdown({ text }: { text: string }) {
 }
 
 function MarkdownAnswer({ content }: { content: string }) {
-  const blocks: JSX.Element[] = [];
+  const blocks: ReactNode[] = [];
   let listItems: string[] = [];
 
   const flushList = () => {

@@ -44,6 +44,8 @@
 
 生产化边界和上线前检查见 [docs/production-notes.md](docs/production-notes.md)。
 
+面试当天的启动顺序、环境检查和常见翻车点见 [docs/interview-day-checklist.md](docs/interview-day-checklist.md)。
+
 ## 本地开发
 
 在仓库根目录运行：

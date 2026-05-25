@@ -72,6 +72,8 @@ Last checked: 2026-05-23 16:04 Asia/Shanghai.
 
 ## 面试前验收
 
+面试当天建议先按 [docs/interview-day-checklist.md](docs/interview-day-checklist.md) 检查 Docker Desktop、`.env`、demo 文档、固定问题和最新 GitHub Actions。
+
 快速收口检查：
 
 ```powershell
