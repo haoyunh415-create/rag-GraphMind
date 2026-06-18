@@ -179,6 +179,117 @@ class AgentOrchestrator:
   - `CITATION_MIN_QUERY_COVERAGE` — query 覆盖度不够的片段直接丢弃
 - 还有一个**证据不足惩罚**：如果最好的一条都达不到阈值，直接标记"弱相关"，生成阶段会触发拒答
 
+<details>
+<summary><b>📖 补充：Citation Pruner 多阈值门禁详解</b></summary>
+
+#### 为什么不能直接 top-K？
+
+三个实际问题：
+1. 分数最高不代表真相关 — RRF 第一名仍可能是运气
+2. 单文档霸榜 — 某个文档的多个片段包揽 top-5，引用来源单一
+3. 没有拒答信号 — 如果最好的一条都不够格，应触发拒答，而不是硬塞给 LLM
+
+#### 四道闸门，逐条审查
+
+```python
+for item in scored:
+    # 闸门 1: 总数上限 (默认 max_items=3)
+    if len(selected) >= 3:
+        reject("max_items_limit")
+
+    # 闸门 2: 单文档上限 (默认 per_document_limit=2)
+    if per_document_counts[doc_key] >= 2:
+        reject("per_document_limit")
+
+    # 闸门 3: 质量门禁 (_threshold_decision)
+    passed, reason = _threshold_decision(item)
+    if not passed:
+        reject(reason)
+
+    # 通过全部闸门 → 选中
+    selected.append(item)
+
+# 兜底: 一条都没选中时，只要第一名覆盖度 ≥ 0.245，降级通过
+if not selected and first["coverage"] >= 0.245:
+    selected = [first]  # fallback_minimum_evidence
+```
+
+#### 质量门禁决策树（_threshold_decision）
+
+```
+候选进入
+  │
+  ├─ 干扰文档 (evidence_penalty ≥ 0.25) → ❌ insufficient_evidence
+  │
+  ├─ 覆盖度不够 (adjusted_coverage < 0.35) → ❌ query_coverage_low
+  │     · adjusted = 原始覆盖度 + 多源加成(0.08) + 图谱加成(0.05)
+  │
+  ├─ 强证据 (原始覆盖度 ≥ 0.60) → ✅ direct_evidence (免检)
+  │
+  ├─ 排位高 (相对分 ≥ 0.55) → ✅ score_and_coverage
+  │
+  └─ 都不满足 → ❌ relative_score_low
+```
+
+#### 四个阈值（可在 .env 调整）
+
+| 阈值 | 默认值 | 作用 |
+|------|--------|------|
+| `CITATION_MAX_ITEMS` | 3 | 最多返回几条引用 |
+| `CITATION_PER_DOCUMENT_LIMIT` | 2 | 单文档最多选几条，防霸榜 |
+| `CITATION_MIN_RELATIVE_SCORE` | 0.55 | 分数必须达到最高分的 55% |
+| `CITATION_MIN_QUERY_COVERAGE` | 0.35 | 问题词覆盖度 ≥ 35% |
+
+#### 多源加成的妙用
+
+同一个片段，双源命中 vs 单源命中，门禁通过率截然不同：
+
+```
+片段A (仅向量命中):  coverage=0.30 → adjusted=0.30 → < 0.35 ❌
+片段B (向量+BM25):   coverage=0.30 → adjusted=0.38 → ≥ 0.35 ✅
+片段C (向量+图谱):   coverage=0.30 → adjusted=0.43 → ≥ 0.35 ✅
+```
+
+多源共识本身就是质量信号，值得降低一点覆盖率门槛。
+
+#### 完整示例
+
+Reranker 输出 5 条，经过 Citation Pruner:
+
+```
+候选1 (03-graph-relations.md): rel=1.00, cov=0.75, graph+vector → direct_evidence ✅
+候选2 (01-commerce-policy.md): rel=0.85, cov=0.55, bm25+vector → score_and_coverage ✅
+候选3 (03-graph-relations.md): rel=0.72, cov=0.48, 同文档已满2条 → ❌ per_document_limit
+候选4 (02-support-operations.md): rel=0.60, cov=0.30, 仅向量 → ❌ query_coverage_low
+候选5 (干扰文档): rel=0.50, cov=0.28, penalty=0.35 → ❌ insufficient_evidence
+
+结果: 选中 2 条 (来自 2 份不同文档)
+```
+
+#### 透明化拒绝原因
+
+每条被拒候选都标记了原因，Trace 里能看到汇总：
+
+```json
+"rejection_counts": {
+    "max_items_limit": 5,         // 正常截断
+    "per_document_limit": 1,      // 防止霸榜
+    "query_coverage_low": 2,      // 质量不行 (多了说明 Reranker 漏了)
+    "insufficient_evidence": 1,   // 干扰文档
+    "relative_score_low": 0       // 多了说明 Reranker 排序有问题
+}
+```
+
+#### 三个文件的关系
+
+```
+fusion.py  →  去重 + 按排名位置粗排 → 位置信号 (几十条)
+reranker.py →  按内容四维精排        → 语义信号 (top_k 条)
+pruner.py  →  按质量门禁最终筛选     → 最后防线 (3-5 条引用)
+```
+
+</details>
+
 ### Q6: 怎么处理用户问了一个知识库里完全不存在的问题？
 
 **回答要点**：
