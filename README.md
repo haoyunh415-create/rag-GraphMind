@@ -11,6 +11,8 @@
 - **质量与性能门禁**：Golden Eval 自动检查 Recall、MRR、Citation Precision、Refusal Accuracy、Behavior Pass、p95 latency 和 performance warnings。
 - **稳定演示材料**：内置 Demo Pack、标准问题、预期答案、2 分钟讲稿和一键 demo smoke。
 
+![对话面板：带引用来源的回答](assets/images/02-chat-citation.png)
+
 ## 技术栈
 
 | 层级 | 技术 |
@@ -41,6 +43,8 @@
 面试或作品集展示时，建议先看 [DEMO.md](DEMO.md)。里面包含架构图、稳定演示流程、项目历程、面试讲法和完整验收命令。
 
 固定演示材料在 [demo/README.md](demo/README.md)，包含可上传文档、标准问题、预期答案和 2 分钟讲稿。
+
+![知识库面板：文档状态与队列健康](assets/images/01-knowledge-base.png)
 
 生产化边界和上线前检查见 [docs/production-notes.md](docs/production-notes.md)。
 

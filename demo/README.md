@@ -37,6 +37,8 @@
 
 ## 演示建议
 
+![列表型回答+引用](../assets/images/03-list-answer.png)
+
 - 优先使用 [questions.md](questions.md) 里的中文问题，命中更直观。
 - 每次回答后打开 Trace 面板，重点展示 retrieval、rank、cite、evaluate 各阶段耗时。
 - 如果要讲生产化能力，切到知识库面板展示文档状态、入库队列、DLQ、重试/取消按钮。

@@ -34,6 +34,10 @@ flowchart LR
 4. 查看知识库顶部总览、队列健康、DLQ 摘要、文档 attempt 和失败原因。
 5. 在对话面板选择“自动”或“知识库”模式提问。
 6. 展示回答引用、引用片段、Trace 事件、图谱路径和 performance warnings。
+
+![多跳推理：图谱路径证据](assets/images/04-multihop.png)
+
+![Trace 面板：检索/重排/引用/评估分段耗时](assets/images/05-trace-1.png)
 7. 运行 Golden Eval，说明项目不是只靠主观观察，而是有质量和性能门禁：
 
 ```powershell

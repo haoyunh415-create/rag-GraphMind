@@ -12,7 +12,7 @@ INDEX_MAPPINGS = {
         "id": {"type": "keyword"},
         "document_id": {"type": "keyword"},
         "document_name": {"type": "text"},
-        "text": {"type": "text", "analyzer": "standard"},
+        "text": {"type": "text", "analyzer": "cjk"},
         "chunk_index": {"type": "integer"},
     }
 }
