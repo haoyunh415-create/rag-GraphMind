@@ -1,31 +1,31 @@
-# Demo Questions
+# 演示问题列表
 
-建议按顺序演示。前 4 个问题展示普通 RAG、引用和列表回答；后 3 个问题展示关系推理、图谱路径和 Trace。
+建议按顺序演示。前 5 个问题展示普通 RAG、引用和列表回答；后 3 个问题展示关系推理、图谱路径和 Trace。
 
-## Basic RAG
+## 基础 RAG
 
-1. Do food items support seven-day no-reason returns?
+1. 食品类商品支持七天无理由退货吗？
 
-2. How soon are electronic invoices usually sent?
+2. 电子发票通常在多长时间内发送？
 
-3. If shipment tracking is not updated for 48 hours, what should customer service do?
+3. 物流信息超过 48 小时未更新，客服应该怎么做？
 
-## Operations Workflow
+## 运营流程
 
-4. If the bot fails to solve the same user question twice, what should happen next?
+4. 如果机器人连续两次未能解决用户的同一个问题，接下来应该发生什么？
 
-5. Which operations metrics should the platform track?
+5. 平台需要追踪哪些运营指标？
 
-## Graph / Multi-hop
+## 图谱 / 多跳关系
 
-6. Who leads the team that maintains the StarBridge Knowledge Base module?
+6. 负责维护星桥知识库模块的团队负责人是谁？
 
-7. Where is the owner of the StarBridge Support Platform headquartered?
+7. 星桥客服平台所属公司的总部在哪里？
 
-8. Incident K-17 affected which database through the Search API dependency?
+8. 故障 K-17 通过搜索 API 的依赖关系影响了哪个数据库？
 
-## Backup Questions
+## 备用问题
 
-9. What should be attached to the support ticket after bot handoff?
+9. 机器人转人工时，工单需要附带哪些内容？
 
-10. Who owned incident K-17?
+10. 故障 K-17 的责任人是谁？

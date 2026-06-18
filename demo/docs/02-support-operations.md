@@ -1,25 +1,25 @@
-# Support Operations Demo Document
+# 客服运营文档
 
-## Bot handoff rule
+## 机器人转人工规则
 
-If the self-service bot fails to solve the same user question twice, the system should create a support ticket.
+如果自助客服机器人针对同一用户问题连续两次未能解决，系统应自动创建人工客服工单。
 
-The support ticket must attach the conversation context, related order id, matched knowledge-base citations, and the last bot answer.
+创建的工单必须附带完整的对话上下文、关联订单编号、匹配到的知识库引用片段以及机器人最后给出的回答。
 
-After the ticket is created, the case should be handed to a human agent.
+工单创建后，该案例应立即转交给人工客服处理。
 
-## Operations metrics
+## 运营指标
 
-The platform should track issue hit rate, answer adoption rate, human handoff rate, average response time, first response time, and customer satisfaction.
+平台需要追踪以下核心运营指标：问题命中率、回答采纳率、人工转接率、平均响应时长、首次响应时长和客户满意度。
 
-The operations dashboard should separate bot-only solved cases from human-assisted solved cases.
+运营看板应将机器人独立解决的案例与人工协助解决的案例分开统计。
 
-The weekly review should include the top unresolved questions and the knowledge documents that produced low-confidence answers.
+每周复盘应包含未能解决的高频问题清单，以及产生低置信度回答的知识文档列表。
 
-## Service level
+## 服务等级
 
-High-priority tickets should receive a first human response within 15 minutes.
+高优先级工单应在 15 分钟内获得首次人工回复。
 
-Normal-priority tickets should receive a first human response within 2 business hours.
+普通优先级工单应在 2 个工作小时内获得首次人工回复。
 
-Resolved tickets should keep the full audit trail for later quality review.
+已解决的工单应保留完整的处理审计记录，便于后续质量复盘。

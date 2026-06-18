@@ -1,89 +1,89 @@
-# Demo Expected Results
+# 演示预期结果
 
 这份文件不是严格断言脚本，而是面试演示时的对照卡。回答 wording 可以不同，但引用和事实应基本一致。
 
-## 1. Food returns
+## 1. 食品退货
 
-Question: `Do food items support seven-day no-reason returns?`
+问题：`食品类商品支持七天无理由退货吗？`
 
-Expected answer: Food items do not support seven-day no-reason returns.
+预期答案：食品类商品不支持七天无理由退货。
 
-Expected citation: `01-commerce-policy.md`, Return policy section.
+预期引用源：`01-commerce-policy.md`，退货政策章节。
 
-Trace observation: retrieval should include commerce policy; citations should not rely on the operations or graph document.
+Trace 观察：检索结果应来自电商规则文档；引用不应混入运营或关系文档。
 
-## 2. Electronic invoice timing
+## 2. 电子发票时效
 
-Question: `How soon are electronic invoices usually sent?`
+问题：`电子发票通常在多长时间内发送？`
 
-Expected answer: Electronic invoices are usually sent to the user's mailbox within 24 hours.
+预期答案：电子发票通常在 24 小时内发送到用户邮箱。
 
-Expected citation: `01-commerce-policy.md`, Invoice process section.
+预期引用源：`01-commerce-policy.md`，发票流程章节。
 
-Trace observation: citation pruning should keep the invoice-specific chunk.
+Trace 观察：引用裁剪应保留发票相关的片段。
 
-## 3. Stale shipment tracking
+## 3. 物流追踪异常
 
-Question: `If shipment tracking is not updated for 48 hours, what should customer service do?`
+问题：`物流信息超过 48 小时未更新，客服应该怎么做？`
 
-Expected answer: Customer service should contact the carrier and notify the user.
+预期答案：客服应主动联系快递公司并通知用户。
 
-Expected citation: `01-commerce-policy.md`, Shipping tracking section.
+预期引用源：`01-commerce-policy.md`，物流追踪章节。
 
-Trace observation: this is a simple retrieval case; performance warnings should normally be empty.
+Trace 观察：这是一个简单检索场景；正常情况下不应出现性能告警。
 
-## 4. Bot handoff workflow
+## 4. 机器人转人工流程
 
-Question: `If the bot fails to solve the same user question twice, what should happen next?`
+问题：`如果机器人连续两次未能解决用户的同一个问题，接下来应该发生什么？`
 
-Expected answer: The system should create a support ticket, attach context, and hand the case to a human agent.
+预期答案：系统应创建客服工单，附带对话上下文，然后将案例转交人工客服。
 
-Expected citation: `02-support-operations.md`, Bot handoff rule section.
+预期引用源：`02-support-operations.md`，机器人转人工规则章节。
 
-Trace observation: answer should mention both the ticket and human handoff, not only one of them.
+Trace 观察：回答应同时提及工单创建和人工转交，不应只提到其中一个。
 
-## 5. Operations metrics
+## 5. 运营指标
 
-Question: `Which operations metrics should the platform track?`
+问题：`平台需要追踪哪些运营指标？`
 
-Expected answer should include: issue hit rate, answer adoption rate, human handoff rate, average response time, first response time, and customer satisfaction.
+预期答案应包含：问题命中率、回答采纳率、人工转接率、平均响应时长、首次响应时长和客户满意度。
 
-Expected citation: `02-support-operations.md`, Operations metrics section.
+预期引用源：`02-support-operations.md`，运营指标章节。
 
-Trace observation: this is a list answer; citation coverage matters more than style.
+Trace 观察：这是一个列表型回答；引用覆盖率比文风更重要。
 
-## 6. Knowledge Base owner team lead
+## 6. 知识库团队负责人
 
-Question: `Who leads the team that maintains the StarBridge Knowledge Base module?`
+问题：`负责维护星桥知识库模块的团队负责人是谁？`
 
-Expected answer: Lin Chen.
+预期答案：林晨。
 
-Expected evidence path: StarBridge Knowledge Base module -> Aurora Search Team -> Lin Chen.
+预期证据路径：星桥知识库模块 → 极光搜索团队 → 林晨。
 
-Expected citation: `03-graph-relations.md`, Team ownership section.
+预期引用源：`03-graph-relations.md`，团队归属章节。
 
-Trace observation: graph path evidence is ideal here. If graph services are unavailable, vector retrieval may still answer from the same document.
+Trace 观察：理想情况下应有图谱路径证据。如果图谱服务不可用，向量检索也可能从同一文档中找到答案。
 
-## 7. Product owner headquarters
+## 7. 产品所属公司总部
 
-Question: `Where is the owner of the StarBridge Support Platform headquartered?`
+问题：`星桥客服平台所属公司的总部在哪里？`
 
-Expected answer: Hangzhou.
+预期答案：杭州。
 
-Expected evidence path: StarBridge Support Platform -> Yunlan Technology -> Hangzhou.
+预期证据路径：星桥客服平台 → 云澜科技 → 杭州。
 
-Expected citation: `03-graph-relations.md`, Company and product relationships section.
+预期引用源：`03-graph-relations.md`，公司与产品关系章节。
 
-Trace observation: this is the cleanest multi-hop demo question.
+Trace 观察：这是最典型的多跳演示问题。
 
-## 8. Incident dependency
+## 8. 故障依赖
 
-Question: `Incident K-17 affected which database through the Search API dependency?`
+问题：`故障 K-17 通过搜索 API 的依赖关系影响了哪个数据库？`
 
-Expected answer: Atlas Vector Database.
+预期答案：Atlas 向量数据库。
 
-Expected evidence path: Incident K-17 -> Search API service -> Atlas Vector Database.
+预期证据路径：故障 K-17 → 搜索 API 服务 → Atlas 向量数据库。
 
-Expected citation: `03-graph-relations.md`, Incident dependency relationships section.
+预期引用源：`03-graph-relations.md`，故障依赖关系章节。
 
-Trace observation: useful for explaining why graph/path evidence is more interpretable than a single retrieved paragraph.
+Trace 观察：适合用来解释为什么图路径证据比单段检索结果更具可解释性。

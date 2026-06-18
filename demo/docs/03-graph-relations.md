@@ -1,29 +1,29 @@
-# Graph Relations Demo Document
+# 公司组织关系文档
 
-## Company and product relationships
+## 公司与产品关系
 
-Yunlan Technology owns the StarBridge Support Platform.
+云澜科技（Yunlan Technology）旗下拥有星桥客服平台（StarBridge Support Platform）。
 
-Yunlan Technology is headquartered in Hangzhou.
+云澜科技总部位于杭州。
 
-The StarBridge Support Platform includes the StarBridge Knowledge Base module, the Conversation Orchestrator module, and the Agent Handoff module.
+星桥客服平台包含星桥知识库模块、对话编排模块和人工转接模块三个核心子系统。
 
-## Team ownership
+## 团队归属
 
-The StarBridge Knowledge Base module is maintained by the Aurora Search Team.
+星桥知识库模块由极光搜索团队（Aurora Search Team）负责维护。
 
-The Aurora Search Team is led by Lin Chen.
+极光搜索团队由林晨（Lin Chen）担任负责人。
 
-The Conversation Orchestrator module is maintained by the Flow Runtime Team.
+对话编排模块由流式计算团队（Flow Runtime Team）负责维护。
 
-The Flow Runtime Team is led by Mei Zhao.
+流式计算团队由赵梅（Mei Zhao）担任负责人。
 
-## Incident dependency relationships
+## 故障依赖关系
 
-Incident K-17 affected the Search API service.
+故障 K-17 影响了搜索 API 服务。
 
-The Search API service depends on the Atlas Vector Database.
+搜索 API 服务依赖于 Atlas 向量数据库。
 
-The Atlas Vector Database was recovered after the index cache was rebuilt.
+Atlas 向量数据库在重建索引缓存后恢复正常。
 
-The incident owner for K-17 was Lin Chen from the Aurora Search Team.
+故障 K-17 的责任人是极光搜索团队的林晨。

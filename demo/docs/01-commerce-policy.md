@@ -1,25 +1,25 @@
-# Commerce Policy Demo Document
+# 电商平台规则文档
 
-## Return policy
+## 退货政策
 
-Food items, custom goods, virtual goods, and opened personal-care items do not support seven-day no-reason returns.
+食品类商品、定制商品、虚拟商品以及已拆封的个人护理用品不支持七天无理由退货。
 
-Normal physical goods support seven-day no-reason returns after delivery if the package, accessories, invoice, and gift items are complete.
+普通实物商品在签收后七天内支持无理由退货，要求包装、配件、发票和赠品完整齐全。
 
-If a return is caused by a product quality issue, the platform should cover the return shipping cost after customer service confirms the evidence.
+如果因商品质量问题导致退货，经客服确认相关证据后，退货运费由平台承担。
 
-## Invoice process
+## 发票流程
 
-Users can request an electronic invoice within 30 days after order completion.
+用户可在订单完成后 30 天内申请开具电子发票。
 
-Electronic invoices are usually sent to the user's mailbox within 24 hours.
+电子发票通常在 24 小时内发送到用户邮箱。
 
-If the invoice title or tax number is wrong, the user should submit a correction request before the invoice is archived.
+如果发票抬头或税号填写有误，用户需在发票归档前提交更正申请。
 
-## Shipping tracking
+## 物流追踪
 
-Users can view shipment location after the carrier scans the parcel.
+快递被揽收扫描后，用户即可查看包裹位置。
 
-If tracking is not updated for 48 hours, customer service should contact the carrier and notify the user.
+如果物流信息超过 48 小时未更新，客服应主动联系快递公司并通知用户。
 
-If a parcel is confirmed lost, the platform should offer either a refund or a replacement shipment.
+如果包裹被确认丢失，平台应为用户提供退款或补发两种选择。

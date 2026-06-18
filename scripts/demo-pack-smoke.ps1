@@ -202,21 +202,21 @@ try {
     $cases = @(
         [pscustomobject]@{
             id = "food-returns"
-            query = "Do food items support seven-day no-reason returns?"
+            query = "食品类商品支持七天无理由退货吗？"
             expected_document = "01-commerce-policy.md"
-            expected_terms = @("food", "do not support")
+            expected_terms = @("食品", "不支持")
         },
         [pscustomobject]@{
             id = "bot-handoff"
-            query = "If the bot fails to solve the same user question twice, what should happen next?"
+            query = "如果机器人连续两次未能解决用户的同一个问题，接下来应该发生什么？"
             expected_document = "02-support-operations.md"
-            expected_terms = @("support ticket", "human agent")
+            expected_terms = @("工单", "人工客服")
         },
         [pscustomobject]@{
             id = "incident-dependency"
-            query = "Incident K-17 affected which database through the Search API dependency?"
+            query = "故障 K-17 通过搜索 API 的依赖关系影响了哪个数据库？"
             expected_document = "03-graph-relations.md"
-            expected_terms = @("Atlas Vector Database")
+            expected_terms = @("Atlas", "向量数据库")
         }
     )
 
