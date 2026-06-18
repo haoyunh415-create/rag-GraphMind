@@ -385,6 +385,126 @@ pruner.py  →  按质量门禁最终筛选     → 最后防线 (3-5 条引用)
 - 引用包含了预期文档 ID + 预期关键词 = 命中
 - Golden Eval 里还验证了 `Refusal Accuracy` — 对不在知识库里的问题，必须拒答
 
+<details>
+<summary><b>📖 补充：rag_quality.py 日常质量评估详解</b></summary>
+
+#### 跟 Golden Eval 的区别
+
+| | evaluate_rag_answer（日常） | Golden Eval（发版前） |
+|------|---------------------------|---------------------|
+| 触发 | 每次回答自动跑 | 手动跑脚本 |
+| 方法 | 无参考，仅看 answer vs context | 有标准答案，对比验证 |
+| 目的 | 日常质量监控 | 回归门禁 |
+| 存储 | SQLite | JSON 报告文件 |
+
+两个互补：日常用 evaluate 监控，发版前用 Golden Eval 回归。
+
+#### 四维评分公式
+
+```python
+overall_score = 
+    groundedness       × 0.35   # 事实支撑度（最重要）
+  + answer_relevance   × 0.25   # 回答相关性
+  + citation_coverage  × 0.20   # 引用覆盖率
+  + retrieval_quality  × 0.20   # 检索质量
+```
+
+全部是用 token 集合运算，不调 LLM，零依赖，确定性输出。
+
+#### ① Groundedness（事实支撑度，35%）
+
+```
+回答中有多少词能从上下文文档里找到？
+
+回答: "食品类商品不能七天无理由退货"
+上下文: "食品类商品不支持七天无理由退货"
+→ 交集词 5/6 = 0.83 ✅
+
+回答: "根据我们的政策，您可以随意退货"（跟文档无关）
+→ 交集词极少 = 0.1 ❌ 在瞎编
+```
+
+#### ② Answer Relevance（回答相关性，25%）
+
+```
+问题 ←→ 回答的双向 F1
+
+问题: "食品类商品支持七天无理由退货吗"
+回答: "食品类商品不支持退货" → F1=0.80 ✅
+回答: "我们总部在杭州" → F1≈0 ❌ 答非所问
+```
+
+如果 Golden Eval 提供了 `expected_answer`，取 max(与 query 的 F1, 与 expected 的 F1)。
+
+#### ③ Citation Coverage（引用覆盖率，20%）— 最有创意的维度
+
+**把回答拆成陈述句，逐句验证有没有被引用文档支撑**：
+
+```python
+statements = _answer_statements(answer)
+# "食品不支持退货。普通商品支持七天退货。" 
+# → ["食品不支持退货", "普通商品支持七天退货"]
+
+for statement in statements:
+    for context in contexts:
+        # 该陈述的 token 与某条引用的 token 重叠度 ≥ 45%
+        # 或者重叠至少 4 个词
+        if coverage >= 0.45 or overlap >= 4:
+            supported += 1; break
+
+citation_coverage = supported / total_statements
+```
+
+```
+回答有 3 个陈述句:
+  陈述1 "食品不支持退货"    → 引用1 支撑 ✅
+  陈述2 "电子发票24h发送"   → 引用2 支撑 ✅
+  陈述3 "总部在杭州"        → 无引用支撑 ❌
+
+citation_coverage = 2/3 = 0.67
+```
+
+#### ④ Retrieval Quality（检索质量，20%）
+
+```python
+retrieval_quality = best_relevance × 0.45      # 最好的一条的 query→ctx F1
+                  + average_relevance × 0.35    # 所有结果的平均 F1
+                  + average_model_score × 0.2   # 检索模型自己的归一化分
+```
+
+衡量检索环节本身——搜回来的东西到底有多少跟问题相关。
+
+#### 质量问题标签
+
+```python
+if not answer:              "empty_answer"        # 空回答
+if not contexts:            "no_citations"        # 无引用
+if groundedness < 0.45:     "low_groundedness"    # 事实支撑不足
+if answer_relevance < 0.35: "low_answer_relevance" # 答非所问
+if citation_coverage < 0.5: "low_citation_coverage" # 引用覆盖不足
+if retrieval_quality < 0.35: "low_retrieval_quality" # 检索太差
+```
+
+前端可以直接看到这些标签，红灯 = 这个回答有问题。
+
+#### 等级标签
+
+```
+≥ 0.75 → "pass" (绿色)
+≥ 0.50 → "warn" (黄色)
+< 0.50 → "fail" (红色)
+```
+
+#### 设计亮点
+
+- **确定性**：纯数学，不调 LLM，同一输入永远同一输出
+- **零依赖**：不需要 API key、不需要额外模型
+- **陈述级检测**：不是笼统地看"引用了几个文档"，而是逐句验证
+- **实时反馈**：每次回答立即出分，前端可见
+- **可持久化**：所有评分存 SQLite，积累历史数据
+
+</details>
+
 ---
 
 ## 六、可观测性（展示工程化思维）
