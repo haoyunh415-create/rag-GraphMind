@@ -14,6 +14,124 @@
 - 自己写的 `AgentOrchestrator` 精确控制 6 个步骤：decompose → retrieve → fuse → rerank → cite → evaluate，每步都有 Trace 耗时
 - 自研不等于从零造轮子 — 模型调用用 litellm/openai SDK、ES/Neo4j 用官方驱动，只是把编排逻辑握在自己手里
 
+<details>
+<summary><b>📖 补充：什么是编排器？我的 AgentOrchestrator 做了什么？</b></summary>
+
+#### 用人话解释"编排器"
+
+把检索系统想象成厨房。你有三个厨师——向量检索（擅长语义相似）、BM25（擅长精确关键词）、图谱检索（擅长关系推理）。编排器就是总指挥：
+
+- "你们三个同时去查，把结果端过来"（并行派活）
+- "重复的菜合在一起，按共识度排序"（RRF 融合）
+- "不够格的菜撤掉，只上最好的"（引用裁剪）
+- "尝尝咸淡"（质量评估）
+
+编排器不自己干活，它调别人干活。LangChain 的 RAG 链之所以是黑盒，就是因为它把所有这些步骤包成了一个函数调用，你不知道中间发生了什么。
+
+#### AgentOrchestrator 六步流水线
+
+```
+提问: "食品类商品支持七天无理由退货吗？"
+  │
+  ├─ Step 0: 意图路由 (classify_intent)
+  │     · kb 模式 → 走完整 RAG
+  │     · chat 模式 → 跳过检索，直接 LLM 回复
+  │     · 空知识库 → 自动降级为通用聊天
+  │
+  ├─ Step 1: 问题拆解 (decompose_query)
+  │     · "退货政策" → ["食品 七天 退货", "不支持退货的商品类型", "退货政策"]
+  │     · 一个复杂问题拆成多个子问题，覆盖面更广
+  │
+  ├─ Step 2: 并行检索 (3路 asyncio.gather)
+  │     · vector: 向量相似 → 覆盖语义
+  │     · bm25:   ES 关键词 → 精确命中
+  │     · graph:  Neo4j 关系 → 结构化推理
+  │     · 每个源搜 top_k×3 条（给融合留余量）
+  │     · 某个源挂了？health check 自动跳过，不影响其他源
+  │     · 最终 all_results = 所有源的并集，每条标记 source 来源
+  │
+  ├─ Step 3: RRF 融合 + Reranker 重排 (fusion.rank)
+  │     · 去重（文本指纹 SHA256）
+  │     · RRF 按排名共识计分（多源命中 = 分更高）
+  │     · Reranker 四维加权精排（问题覆盖 + 短语命中 + 来源 + 原始分）
+  │     · 输出 → top_k 条最优结果
+  │
+  ├─ Step 4: 引用裁剪 (Citation Pruner)
+  │     · 多阈值门禁筛选
+  │     · 删掉弱相关、单文档霸榜的片段
+  │     · 一条都选不出来 → 触发"证据不足"
+  │
+  ├─ Step 5: 答案生成 (synthesize_answer)
+  │     · 有引用 → 流式输出带引用的回答
+  │     · 无引用且 kb 模式 → 拒答（不瞎编）
+  │     · 无引用且 auto 模式 → 通用 LLM 但提示可能不准确
+  │
+  ├─ Step 6: 质量评估 (evaluate_rag_answer)
+  │     · 事实支撑度 + 相关性 + 引用覆盖率 + 检索质量
+  │     · 持久化到 SQLite，可回溯
+  │
+  └─ 最终: 全链路 Trace → 前端 Trace 面板可视化
+```
+
+#### 核心代码（精简版）
+
+```python
+class AgentOrchestrator:
+    def __init__(self, query_id, conversation_id, top_k, mode):
+        self.vector_store = VectorStore()      # 向量检索
+        self.graph = KnowledgeGraph()          # 图谱检索
+        self.bm25 = BM25Search()               # BM25 检索
+        self.fusion = FusionRanker()           # RRF 融合
+
+    async def run(self, query):
+        trace = RetrievalTrace(...)             # 全链路追踪
+
+        # Step 0: 意图路由
+        intent = await classify_intent(query)
+        if intent == "chat":
+            return await direct_chat(query)     # 跳过检索
+
+        # Step 1: 拆解
+        sub_queries = await decompose_query(query)
+
+        # Step 2: 并行检索（三路同时发请求）
+        jobs = {"vector": self.vector_store.search(...)}
+        if backend_health["graph"]["available"]:
+            jobs["graph"] = self.graph.search(...)
+        if backend_health["bm25"]["available"]:
+            jobs["bm25"] = self.bm25.search(...)
+        results = await asyncio.gather(*jobs.values())  # 并行
+
+        # Step 3: 融合 + 重排
+        ranked = await self.fusion.rank(query, all_results)
+
+        # Step 4: 引用裁剪
+        citations = prune_citations_with_report(query, ranked)
+
+        # Step 5: 流式生成
+        async for token in synthesize_answer(query, citations):
+            yield token
+
+        # Step 6: 质量评估 → 持久化
+        evaluation = evaluate_rag_answer(query, answer, ...)
+        await EvaluationStore().save(evaluation)
+
+        yield trace.to_dict()  # 全链路数据 → 前端 Trace 面板
+```
+
+#### 为什么这样设计（面试时的关键论点）
+
+| 对比维度 | LangChain 默认链 | AgentOrchestrator |
+|---------|-----------------|-------------------|
+| 可见性 | `invoke()` 黑盒 | 每步 Trace + 输入输出 |
+| 检索策略 | 单路向量 | 三路并行 + RRF 融合 |
+| 引用质量 | 原始 top-K | 多阈值裁剪 + 拒答 |
+| 容错 | 挂了报错 | 独立 health check，可降级 |
+| 质量保证 | 无 | 每次回答自动评估 + 持久化 |
+| 可调试 | 困难 | Trace 面板定位瓶颈 |
+
+</details>
+
 ### Q2: 为什么三路并行检索？向量不够吗？
 
 **考察点**：对检索系统局限性的理解
