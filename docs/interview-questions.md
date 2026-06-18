@@ -526,6 +526,101 @@ if retrieval_quality < 0.35: "low_retrieval_quality" # 检索太差
 - 不可用时自动降级：图谱挂了不影响向量+BM25 正常工作
 - 生产流量下，这个缓存减少了 90% 的无效 TCP 握手
 
+<details>
+<summary><b>📖 补充：observability.py Trace 实现详解</b></summary>
+
+#### RetrievalTrace：全链路手工 Trace
+
+```python
+trace = RetrievalTrace(query_id, original_query)
+# start_time = perf_counter()  ← query 开始的 wall clock
+
+# 编排器每完成一步就记录
+trace.add_step("intent", {"intent": "kb"})
+trace.add_step("retrieve", {"counts": {"vector": 15, "bm25": 8, "graph": 3}})
+trace.add_step("rank", {"input_count": 26, "output_count": 10})
+trace.add_step("cite", {"rejection_counts": {...}})
+trace.add_step("generate", {"tokens": 245})
+trace.add_step("evaluate", {"overall_score": 0.82})
+
+# 最终输出
+trace.to_dict() → 前端 Trace 面板渲染
+```
+
+#### 增量计时机制
+
+每个 step 记录的是**增量耗时**，不是累计：
+
+```
+timeline:
+  0ms     query 开始
+  5ms     add_step("intent")      → duration=5ms,  elapsed=5ms
+  20ms    add_step("decompose")   → duration=15ms, elapsed=20ms
+  220ms   add_step("retrieve")    → duration=200ms, elapsed=220ms
+  270ms   add_step("rank")        → duration=50ms,  elapsed=270ms
+```
+
+前端看到的每一行 Trace 就是这些 step，一眼看出哪步最慢。
+
+#### 性能预算 + 告警
+
+```python
+# .env: TRACE_STEP_BUDGETS_MS=backend_health=500,retrieve=300,rank=100,cite=50
+
+def _performance_warning(name, duration_ms):
+    budget_ms = budgets.get(name)
+    if duration_ms <= budget_ms:
+        return None  # 正常
+    severity = "warn" if duration_ms <= budget_ms * 2 else "slow"
+    return {"step": name, "duration_ms": 250, "budget_ms": 100, "over_by_ms": 150}
+```
+
+- `retrieve` 经常标黄 → 检索是瓶颈，需要优化
+- `rank` 标红 → Reranker 太重了
+- 不像事后排查，而是每次回答都主动检测
+
+#### to_dict() 关键字段
+
+```python
+{
+    "steps": [{"name": "retrieve", "duration_ms": 200, "counts": {...}}, ...],
+    "total_ms": 850,
+    "timings": {
+        "accounted_ms": 800,        # step 覆盖的耗时
+        "untracked_ms": 50,         # 调度间隙（asyncio yield/await 的时间）
+        "slowest_step": {"name": "retrieve", "duration_ms": 200},
+        "performance_warnings": [...],
+        "performance_warning_count": 2
+    }
+}
+```
+
+`untracked_ms` 暴露了编排器自身的调度开销——如果这个值超过总耗时的 20%，说明编排逻辑本身需要优化。
+
+#### detail 平铺机制
+
+```python
+trace.add_step("retrieve", {"counts": {...}, "errors": [...]}
+
+# to_dict 时 detail 被平铺到 step 顶层
+{ "name": "retrieve", "duration_ms": 200, "counts": {...}, "errors": [...] }
+```
+
+前端不用解析嵌套结构，直接取字段渲染。
+
+#### @traced 装饰器（生产级 OTel）
+
+```python
+@traced("retrieve-documents")
+async def some_function(...): ...
+```
+
+- 装了 OpenTelemetry SDK → 自动包 span，送 collector（Prometheus/Grafana）
+- 没装 → 降级为纯日志，不报错
+- 开发用 `RetrievalTrace`（精细），生产用 OTel span（标准协议）
+
+</details>
+
 ---
 
 ## 七、项目复盘（展示成长性）
